@@ -1,7 +1,10 @@
 import os
 
 def startup_check():
-    """"Checks that all required environment variables are set and valid."""
+    """"Checks that all required environment variables are set and valid
+    Raises:
+        ValueError: If any required environment variable is missing or invalid.
+    """
     required_env_vars = [
         'GENERATOR_PROVIDER',
         'VERIFIER_PROVIDER',
