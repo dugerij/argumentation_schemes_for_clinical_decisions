@@ -1,21 +1,40 @@
-import os
-from ollama import chat
-from dotenv import load_dotenv
+# imports
+import asyncio
+from pathlib import Path
 
-from utils import startup_check
+import pandas as pd
+from dotenv import load_dotenv
+from graphrag.config.load_config import load_config
+from graphrag import api
+
+from make_index import build_index
+from utils import startup_check, load_dataset
+    
 
 load_dotenv()
 startup_check() # Ensure required variables are set
+graphrag_config = load_config(Path('./'))
 
-response = chat(
-    model=os.environ.get('GENERATOR_BASE_MODEL'),
-    messages=[
-        {
-            'role': 'user',
-            'content':  'A 23-year-old pregnant woman at 22 weeks gestation presents with burning upon urination. She states it started 1 day ago and has been worsening despite drinking more water and taking cranberry extract. She otherwise feels well and is followed by a doctor for her pregnancy. Her temperature is 97.7°F (36.5°C), blood pressure is 122/77 mmHg, pulse is 80/min, respirations are 19/min, and oxygen saturation is 98% on room air. Physical exam is notable for an absence of costovertebral angle tenderness and a gravid uterus. Which of the following is the best treatment for this patient?'
-            }
-        ],
-    think=False,
+
+asyncio.run(build_index(graph_config=graphrag_config))
+
+entities = pd.read_parquet("./output/entities.parquet")
+communities = pd.read_parquet("./output/communities.parquet")
+community_reports = pd.read_parquet(
+        "./output/community_reports.parquet"
 )
 
-print(response.message.content)
+response, context = asyncio.run(
+    api.local_search(
+    config=graphrag_config,
+    entities=entities,
+    communities=communities,
+    community_reports=community_reports,
+    community_level=2,
+    dynamic_community_selection=False,
+    response_type="Multiple Paragraphs",
+    query="Who is Scrooge and what are his main relationships?",
+    )
+)
+
+print("Response:", response)

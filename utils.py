@@ -1,4 +1,5 @@
 import os
+import json
 
 def startup_check():
     """"Checks that all required environment variables are set and valid
@@ -33,3 +34,10 @@ def startup_check():
                 raise ValueError("GEMINI_API_KEY must be set when using Gemini as a provider.")
             
     print("Startup check passed. All required environment variables are set and valid.")
+
+
+def load_dataset(file_path: str):
+    with open(file_path, 'r') as file:
+        for line in file:
+            raw_json = json.loads(line)
+            print(raw_json)
