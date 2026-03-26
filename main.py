@@ -1,6 +1,8 @@
 # imports
 import asyncio
+import json
 from pathlib import Path
+import random
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -14,6 +16,13 @@ from utils import startup_check, load_dataset
 load_dotenv()
 startup_check() # Ensure required variables are set
 graphrag_config = load_config(Path('./'))
+file_path = "data/medqa/data_clean/questions/US/4_options/phrases_no_exclude_train.jsonl"
+with open(file_path, "r") as f:
+    random_line = random.choice(f.readlines())
+
+data = json.loads(random_line)
+question = data.get("question") + '\n' + '\n'.join(data.get("options"))
+expected_answer = data.get("answer")
 
 
 asyncio.run(build_index(graph_config=graphrag_config))
@@ -33,8 +42,9 @@ response, context = asyncio.run(
     community_level=2,
     dynamic_community_selection=False,
     response_type="Multiple Paragraphs",
-    query="Who is Scrooge and what are his main relationships?",
+    query=question,
     )
 )
 
 print("Response:", response)
+print("\nExpected Answer:", expected_answer)
