@@ -1,6 +1,7 @@
 # imports
 import asyncio
 import json
+import os
 from pathlib import Path
 import random
 
@@ -25,12 +26,13 @@ question = data.get("question") + '\n' + '\n'.join(data.get("options"))
 expected_answer = data.get("answer")
 
 
-asyncio.run(build_index(graph_config=graphrag_config))
+indexes = asyncio.run(build_index(graph_config=graphrag_config))
 
-entities = pd.read_parquet("./output/entities.parquet")
-communities = pd.read_parquet("./output/communities.parquet")
+output_dir = os.environ.get('OUTPUT_BASE_DIR')
+entities = pd.read_parquet(f"{output_dir}/entities.parquet")
+communities = pd.read_parquet(f"{output_dir}/communities.parquet")
 community_reports = pd.read_parquet(
-        "./output/community_reports.parquet"
+        f"{output_dir}/community_reports.parquet"
 )
 
 response, context = asyncio.run(
@@ -45,6 +47,7 @@ response, context = asyncio.run(
     query=question,
     )
 )
-
-print("Response:", response)
-print("\nExpected Answer:", expected_answer)
+print("Question: ", question)
+print("Response: ", response)
+print("\n\nExpected Answer: ", expected_answer)
+print("\n\nContext: ", context)
