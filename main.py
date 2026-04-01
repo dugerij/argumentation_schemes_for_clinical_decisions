@@ -25,8 +25,9 @@ data = json.loads(random_line)
 question = data.get("question") + '\n' + '\n'.join(data.get("options"))
 expected_answer = data.get("answer")
 
-
-indexes = asyncio.run(build_index(graph_config=graphrag_config))
+indexes = asyncio.run(
+    build_index()
+    )
 
 output_dir = os.environ.get('OUTPUT_BASE_DIR')
 entities = pd.read_parquet(f"{output_dir}/entities.parquet")
