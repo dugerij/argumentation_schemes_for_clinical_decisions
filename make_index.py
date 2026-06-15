@@ -1,58 +1,135 @@
+import argparse
+import asyncio
+import subprocess
 from pathlib import Path
-from pprint import pprint
 
-from graphrag.config.load_config import load_config
-from graphrag.index.typing.pipeline_run_result import PipelineRunResult
-from graphrag.cli.index import index_cli
-from graphrag.config.enums import IndexingMethod
+from dotenv import load_dotenv
 
 
-async def build_index(
-    root_dir: Path = None,
-    method: IndexingMethod = IndexingMethod.Standard,
-    verbose: bool = True,
-    cache: bool = True,
-    dry_run: bool = False,
-    skip_validation: bool = False,
-) -> list[PipelineRunResult]:
-    """
-    Run the GraphRAG index pipeline using the CLI interface.
-    Adapted from the original CLI command to be called from Python code, with error handling and result reporting.
-    https://github.com/microsoft/graphrag/discussions/513
-    
-    Args:
-        root_dir: Root directory for input/output data (defaults to current directory)
-        method: Indexing method (Full, Update, or Diff)
-        verbose: Enable verbose logging
-        cache: Enable LLM cache (set to False to disable)
-        dry_run: Run without executing steps
-        skip_validation: Skip validation checks
+DEFAULT_DOMAIN = """
+clinical medicine, including basic medical sciences such as anatomy, biochemistry,
+physiology, pathophysiology, pathology and pharmacology; epidemiology; clinical
+symptomatology; examination findings; investigations and interpretation; disease
+progression and prognosis; treatment mechanisms, side effects, interactions, and
+patient-centered care.
+""".strip()
 
-    Returns:
-        List containing a PipelineRunResult with success/error status
-    """
-    try:
-        if root_dir is None:
-            root_dir = Path("./")
-        else:
-            root_dir = Path(root_dir)
-            
-        index_cli(
-            root_dir=root_dir,
-            method=method,
-            verbose=verbose,
-            cache=cache,
-            dry_run=dry_run,
-            skip_validation=skip_validation,
+CLINICAL_ARGUMENTATION_DOMAIN = """
+clinical medicine and evidence-based guideline reasoning over MIMIC-IV notes,
+NICE guidelines, WHO guidelines, and medical textbooks. Extract clinically
+relevant entities and relationships for auditable recommendation generation.
+Prefer UMLS/MEDCIN-aligned concepts where available, including diseases,
+symptoms, signs, medications, procedures, laboratory tests, findings,
+contraindications, adverse effects, complications, risk factors, clinical goals,
+guideline recommendations, and treatment relationships. The resulting graph will
+support formal argumentation schemes, medical critical questions, and Abstract
+Argumentation Framework adjudication of clinical conflicts.
+""".strip()
+
+
+def tune_prompts(
+    domain: str,
+    output: str,
+    selection_method: str,
+    limit: int,
+    max_tokens: int,
+    min_examples_required: int,
+    discover_entity_types: bool,
+    language: str,
+) -> None:
+    command = [
+        "graphrag",
+        "prompt-tune",
+        "--domain",
+        domain,
+        "--output",
+        output,
+        "--selection-method",
+        selection_method,
+        "--limit",
+        str(limit),
+        "--max-tokens",
+        str(max_tokens),
+        "--min-examples-required",
+        str(min_examples_required),
+        "--language",
+        language,
+    ]
+
+    if discover_entity_types:
+        command.append("--discover-entity-types")
+    else:
+        command.append("--no-discover-entity-types")
+
+    subprocess.run(command, check=True)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="GraphRAG indexing utilities.")
+    parser.add_argument(
+        "command",
+        choices=("build", "prompt-tune", "prompt-tune-clinical"),
+        help="Run GraphRAG indexing or prompt tuning.",
+    )
+    parser.add_argument("--config", default="settings.yaml", help="Path to GraphRAG settings YAML.")
+    parser.add_argument("--method", default="standard", help="GraphRAG indexing method.")
+    parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="Domain text for prompt tuning.")
+    parser.add_argument("--output", default="prompts", help="Prompt output directory relative to project root.")
+    parser.add_argument(
+        "--selection-method",
+        default="auto",
+        choices=("all", "random", "top", "auto"),
+        help="Text chunk selection method for prompt tuning.",
+    )
+    parser.add_argument("--limit", type=int, default=30, help="Number of documents to load for prompt tuning.")
+    parser.add_argument("--max-tokens", type=int, default=4000, help="Maximum token budget for prompt generation.")
+    parser.add_argument(
+        "--min-examples-required",
+        type=int,
+        default=3,
+        help="Minimum examples to generate/include in the extraction prompt.",
+    )
+    parser.add_argument("--language", default="English", help="Primary prompt language.")
+    parser.add_argument(
+        "--discover-entity-types",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Allow GraphRAG to discover entity types during prompt tuning.",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    load_dotenv()
+    args = parse_args()
+
+    if args.command == "build":
+        from rag.index import build_graphrag_index
+
+        asyncio.run(build_graphrag_index(Path(args.config), args.method))
+    elif args.command == "prompt-tune":
+        tune_prompts(
+            domain=args.domain,
+            output=args.output,
+            selection_method=args.selection_method,
+            limit=args.limit,
+            max_tokens=args.max_tokens,
+            min_examples_required=args.min_examples_required,
+            discover_entity_types=args.discover_entity_types,
+            language=args.language,
         )
-        index_result = [PipelineRunResult(workflow="index", error=None)]
-    except Exception as e:
-        error_msg = str(e)
-        index_result = [PipelineRunResult(workflow="index", error=error_msg)]
+    elif args.command == "prompt-tune-clinical":
+        tune_prompts(
+            domain=CLINICAL_ARGUMENTATION_DOMAIN,
+            output=args.output,
+            selection_method=args.selection_method,
+            limit=args.limit,
+            max_tokens=args.max_tokens,
+            min_examples_required=args.min_examples_required,
+            discover_entity_types=args.discover_entity_types,
+            language=args.language,
+        )
 
-    # Print statuses
-    for workflow_result in index_result:
-        status = f"error\n{workflow_result.error}" if workflow_result.error else "success"
-        print(f"Workflow Name: {workflow_result.workflow}\tStatus: {status}")
 
-    return index_result
+if __name__ == "__main__":
+    main()

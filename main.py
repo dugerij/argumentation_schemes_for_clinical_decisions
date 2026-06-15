@@ -1,54 +1,30 @@
-# imports
 import asyncio
-import json
 import os
-from pathlib import Path
 import random
+from pathlib import Path
 
-import pandas as pd
 from dotenv import load_dotenv
 from graphrag.config.load_config import load_config
-from graphrag import api
 
-from make_index import build_index
-from utils import startup_check, load_dataset
-    
+from eval.medqa_smoke import run_medqa_smoke_eval
+from helpers.config import startup_check
 
-load_dotenv()
-startup_check() # Ensure required variables are set
-graphrag_config = load_config(Path('./'))
-file_path = "data/medqa/data_clean/questions/US/4_options/phrases_no_exclude_train.jsonl"
-with open(file_path, "r") as f:
-    random_line = random.choice(f.readlines())
 
-data = json.loads(random_line)
-question = data.get("question") + '\n' + '\n'.join(data.get("options"))
-expected_answer = data.get("answer")
+CONFIG_PATH = Path("settings.yaml")
 
-indexes = asyncio.run(
-    build_index()
-    )
 
-output_dir = os.environ.get('OUTPUT_BASE_DIR')
-entities = pd.read_parquet(f"{output_dir}/entities.parquet")
-communities = pd.read_parquet(f"{output_dir}/communities.parquet")
-community_reports = pd.read_parquet(
-        f"{output_dir}/community_reports.parquet"
-)
+def main() -> None:
+    load_dotenv()
+    startup_check()
 
-response, context = asyncio.run(
-    api.local_search(
-    config=graphrag_config,
-    entities=entities,
-    communities=communities,
-    community_reports=community_reports,
-    community_level=2,
-    dynamic_community_selection=False,
-    response_type="Multiple Paragraphs",
-    query=question,
-    )
-)
-print("Question: ", question)
-print("Response: ", response)
-print("\n\nExpected Answer: ", expected_answer)
-print("\n\nContext: ", context)
+    random.seed(int(os.environ.get("RANDOM_SEED", "42")))
+    sample_size = int(os.environ.get("EVAL_SAMPLE_SIZE", "1"))
+    index_method = os.environ.get("GRAPHRAG_INDEX_METHOD", "standard")
+    output_dir = Path(os.environ["OUTPUT_BASE_DIR"])
+    config = load_config(CONFIG_PATH)
+
+    asyncio.run(run_medqa_smoke_eval(config, output_dir, sample_size, index_method))
+
+
+if __name__ == "__main__":
+    main()

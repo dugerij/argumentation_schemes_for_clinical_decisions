@@ -1,121 +1,260 @@
 
 -Goal-
 Given a text document that is potentially relevant to this activity and a list of entity types, identify all entities of those types from the text and all relationships among the identified entities.
- 
+
 -Steps-
 1. Identify all entities. For each identified entity, extract the following information:
 - entity_name: Name of the entity, capitalized
-- entity_type: One of the following types: [{entity_types}]
+- entity_type: One of the following types: [disease, risk_factor, gene, inheritance_pattern, anatomical_structure, laboratory_test, imaging_modality, procedure, drug, biomarker, classification, symptom, population]
 - entity_description: Comprehensive description of the entity's attributes and activities
 Format each entity as ("entity"<|><entity_name><|><entity_type><|><entity_description>)
- 
+
 2. From the entities identified in step 1, identify all pairs of (source_entity, target_entity) that are *clearly related* to each other.
 For each pair of related entities, extract the following information:
 - source_entity: name of the source entity, as identified in step 1
 - target_entity: name of the target entity, as identified in step 1
 - relationship_description: explanation as to why you think the source entity and the target entity are related to each other
-- relationship_strength: a numeric score indicating strength of the relationship between the source entity and target entity
- Format each relationship as ("relationship"<|><source_entity><|><target_entity><|><relationship_description><|><relationship_strength>)
- 
+- relationship_strength: an integer score between 1 to 10, indicating strength of the relationship between the source entity and target entity
+Format each relationship as ("relationship"<|><source_entity><|><target_entity><|><relationship_description><|><relationship_strength>)
+
 3. Return output in English as a single list of all the entities and relationships identified in steps 1 and 2. Use **##** as the list delimiter.
- 
-4. When finished, output <|COMPLETE|>
- 
-######################
+
+4. If you have to translate into English, just translate the descriptions, nothing else!
+
+5. When finished, output <|COMPLETE|>.
+
 -Examples-
 ######################
+
 Example 1:
-Entity_types: ORGANIZATION,PERSON
-Text:
-The Verdantis's Central Institution is scheduled to meet on Monday and Thursday, with the institution planning to release its latest policy decision on Thursday at 1:30 p.m. PDT, followed by a press conference where Central Institution Chair Martin Smith will take questions. Investors expect the Market Strategy Committee to hold its benchmark interest rate steady in a range of 3.5%-3.75%.
-######################
-Output:
-("entity"<|>CENTRAL INSTITUTION<|>ORGANIZATION<|>The Central Institution is the Federal Reserve of Verdantis, which is setting interest rates on Monday and Thursday)
-##
-("entity"<|>MARTIN SMITH<|>PERSON<|>Martin Smith is the chair of the Central Institution)
-##
-("entity"<|>MARKET STRATEGY COMMITTEE<|>ORGANIZATION<|>The Central Institution committee makes key decisions about interest rates and the growth of Verdantis's money supply)
-##
-("relationship"<|>MARTIN SMITH<|>CENTRAL INSTITUTION<|>Martin Smith is the Chair of the Central Institution and will answer questions at a press conference<|>9)
-<|COMPLETE|>
 
-######################
+entity_types: [disease, risk_factor, gene, inheritance_pattern, anatomical_structure, laboratory_test, imaging_modality, procedure, drug, biomarker, classification, symptom, population]
+text:
+) appears to contribute both to the initial adaptive hyperfiltration and to the subsequent maladaptive hypertrophy and sclerosis. This process explains why a reduction in renal mass from an isolated insult may lead to a progressive decline in renal function over many years (Fig. 335-3).
+
+It is important to identify factors that increase the risk for CKD, even in individuals with normal GFR. Risk factors include small for gestation birth weight, childhood obesity, hypertension, diabetes mellitus, autoimmune disease, advanced age, African ancestry, a family history of kidney disease, a previous episode of acute kidney injury, and the presence of proteinuria, abnormal urinary sediment, or structural abnormalities of the urinary tract.
+
+Many rare inherited forms of CKD follow a Mendelian inheritance pattern, often as part of a systemic syndrome, with the most common in this category being autosomal dominant polycystic kidney disease. In addition, recent research in the genetics of predisposition to common complex diseases (Chap. 82) has revealed DNA sequence variants at a number of genetic loci that are associated with common forms of CKD. A striking example is the finding of allelic versions of the APOL1 gene, of West African population ancestry, which contributes to the several-fold higher frequency of certain common etiologies of nondiabetic CKD (e.g., focal segmental glomerulosclerosis) observed among African and Hispanic Americans. The prevalence in West African populations seems to have arisen as an evolutionary adaptation conferring protection from tropical pathogens. As in other common diseases
+
+FIGuRE 335-2 Left: Schema of the normal glomerular architecture. Right: Secondary glomerular changes associated with a reduction in nephron number, including enlargement of capillary lumens and focal adhesions, which are thought to occur consequent to compensatory hyperfiltration and hypertrophy in the remaining nephrons. (Modified from JR Ingelfinger: N Engl J Med 348:99, 2003.)
+
+FIGuRE 335-1 Kidney Disease Improving Global Outcome (KDIGO) classification of chronic kidney disease (CKD). Gradation of color from green to red corresponds to increasing risk and progression of CKD. GFR, glomerular filtration rate. (Reproduced with permission from Kidney
+
+Int Suppl 3:5-14, 2013.) with a heritable component, an environmental trigger (such as a viral pathogen) is required to transform genetic risk into disease.
+
+To stage CKD, it is necessary to estimate the GFR rather than relying on serum creatinine concentration (Table 335-1). Many laboratories now report an estimated GFR, or eGFR, using one of these equations.
+
+The normal annual mean decline in GFR with age from the peak GFR (~120 mL/min per 1.73 m2) attained during the third decade of life is ~1 mL/min per year per 1.73 m2, reaching a mean value of 70 mL/min per 1.73 m2 at age 70. Although reduced GFR occurs with human aging, the lower GFR signifies a true loss of kidney function, with all of the implications that apply to the corresponding stage of CKD. The mean GFR is lower in women than in men. For example, a woman in her 80s with a normal serum creatinine may have a GFR of just 50 mL/min per 1.73 m2. Thus, even a mild elevation in serum creatinine concentration (e.g., 130 μmol/L [1.5 mg/dL]) often signifies a substantial reduction in GFR in most individuals.
+
+FIGuRE 335-3 Left: Low-power photomicrograph of a normal kidney showing normal glomeruli and healthy tubulointerstitium without fibrosis. Right: Low-power photomicrograph of chronic kidney disease with sclerosis of many glomeruli and severe tubulointerstitial fibrosis (Masson trichrome, ×40 magnification). (Slides courtesy of the late Dr. Andrew Herzenberg.)
+
+The equations for estimating GFR are valid only if the patient is in steady state, that is, the serum creatinine is neither rising nor falling over days.
+
+Measurement of albuminuria is also helpful for monitoring nephron injury and the response to therapy in many forms of CKD, especially chronic glomerular diseases. Although an accurate 24-h urine collection is the standard for measurement of albuminuria, the measurement of protein-to-creatinine ratio in a spot first-morning urine sample is often more practical to obtain and correlates well, but not perfectly, with 24-h urine collections. Microalbuminuria (Fig. 335-1, stage A2) refers to the excretion of amounts of albumin too small to detect by urinary dipstick or conventional measures of urine protein. It is a good screening test for early detection of renal disease, and may be a marker for the presence of microvascular disease in general. If a patient has a large amount of excreted albumin, there is no reason to test for microalbuminuria.
+
+Stages 1 and 2 CKD are usually not associated with any symptoms arising from the decrement in GFR. If the decline in GFR progresses to stages 3 and 4, clinical and laboratory complications of CKD become reCOMMenDeD equatIOns FOr estIMatIOn OF gLOMeruLar FILtratIOn rate (gFr) usIng seruM CreatInIne COnCentratIOn (sCr), age, sex, raCe, anD BODy WeIght 1. Equation from the Modification of Diet in Renal Disease study
+
+Estimated GFR (mL/min per 1.73 m2) = 
+------------------------
+output:
+("entity"<|>FUNCTIONAL HYPOGLYCEMIA<|>DISEASE<|>Functional hypoglycemia is a syndrome characterized by an excessive fall in blood glucose after a carbohydrate meal, producing symptoms such as malaise, fatigue, nervousness, headache, and tremor; it requires documented low glucose and improvement with oral glucose)##
+("entity"<|>HYPERGLYCEMIC ENCEPHALOPATHY<|>DISEASE<|>Hyperglycemic encephalopathy denotes brain dysfunction resulting from severe hyperglycemia, often presenting with seizures, twitching, and altered mental status)##
+("entity"<|>HYPOGLYCEMIC ENCEPHALOPATHY<|>DISEASE<|>Hypoglycemic encephalopathy is brain injury caused by prolonged low blood glucose, with primary damage to the cerebral cortex and possible seizures or twitching)##
+("entity"<|>DIABETIC KETOACIDOSIS<|>DISEASE<|>Diabetic ketoacidosis (DKA) is an acute metabolic emergency in diabetes characterized by hyperglycemia (>400 mg/dL), metabolic acidosis (pH < 7.20, bicarbonate < 10 mEq/L), elevated ketone bodies and β‑hydroxybutyric acid, dehydration, Kussmaul respiration, and potential coma)##
+("entity"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>DISEASE<|>Hyperosmolar nonketotic hyperglycemia (HHS) is a severe hyperglycemic state with plasma glucose >600 mg/dL, serum osmolality >330 mOsm/L, absent or mild ketoacidosis, marked dehydration, hemoconcentration and prerenal azotemia, occurring mainly in elderly diabetics)##
+("entity"<|>CHRONIC FATIGUE SYNDROME<|>DISEASE<|>Chronic fatigue syndrome is a disorder of profound, disabling fatigue not alleviated by rest, often accompanied by neurocognitive symptoms; mentioned as a condition that may be mislabelled as functional hypoglycemia)##
+("entity"<|>ANXIETY SYNDROME<|>DISEASE<|>Anxiety syndrome encompasses excessive worry, nervousness and physical tension; cited as a differential diagnosis for functional hypoglycemia)##
+("entity"<|>CEREBRAL CORTEX<|>ANATOMICAL_STRUCTURE<|>The cerebral cortex is the outer layer of the brain responsible for higher cognitive functions; primary site of damage in hypoglycemic encephalopathy)##
+("entity"<|>CEREBELLAR CORTEX<|>ANATOMICAL_STRUCTURE<|>The cerebellar cortex coordinates motor control; noted to be less vulnerable to hypoglycemia than the cerebral cortex)##
+("entity"<|>NEURON<|>ANATOMICAL_STRUCTURE<|>Neurons are excitable cells of the nervous system; undergo ultrastructural changes such as mitochondrial swelling and nuclear membrane disruption during severe hypoglycemia)##
+("entity"<|>MICROGLIA<|>ANATOMICAL_STRUCTURE<|>Microglia are resident immune cells of the CNS; replace degenerated neurons after hypoglycemic injury)##
+("entity"<|>ASTROCYTE<|>ANATOMICAL_STRUCTURE<|>Astrocytes are glial cells that support neuronal metabolism; become prominent after neuronal loss in hypoglycemic encephalopathy)##
+("entity"<|>BLOOD GLUCOSE<|>LABORATORY_TEST<|>Blood glucose measurement quantifies plasma glucose concentration; diagnostic threshold for DKA (>400 mg/dL) and HHS (>600 mg/dL) and for hypoglycemia (<70 mg/dL))##
+("entity"<|>BLOOD pH<|>LABORATORY_TEST<|>Arterial blood pH assesses acid–base status; values <7.20 indicate severe metabolic acidosis in DKA)##
+("entity"<|>SERUM BICARBONATE<|>LABORATORY_TEST<|>Serum bicarbonate concentration reflects metabolic buffering; levels <10 mEq/L are diagnostic for DKA)##
+("entity"<|>KETONE BODIES<|>BIOMARKER<|>Ketone bodies (acetoacetate, β‑hydroxybutyrate) rise in the blood and urine during DKA, serving as a marker of uncontrolled fat oxidation)##
+("entity"<|>β‑HYDROXYBUTYRIC ACID<|>BIOMARKER<|>β‑Hydroxybutyric acid is the predominant ketone body in DKA, measurable in serum and urine)##
+("entity"<|>Glycosuria<|>BIOMARKER<|>Presence of glucose in urine indicates plasma glucose above the renal threshold, common in DKA and HHS)##
+("entity"<|>Serum Lactate<|>BIOMARKER<|>Lactate level rises when NADH excess drives pyruvate reduction; contributes to metabolic acidosis in severe hypoglycemia)##
+("entity"<|>Serum Uric Acid<|>BIOMARKER<|>Elevated uric acid results from reduced renal excretion during HHS, predisposing to acute gout attacks)##
+("entity"<|>Prothrombin Time (PT)<|>LABORATORY_TEST<|>PT measures clotting time after tissue factor addition; prolonged PT can reflect liver dysfunction)##
+("entity"<|>Insulin<|>DRUG<|>Insulin is a peptide hormone administered intravenously or subcutaneously to lower blood glucose in DKA, HHS, and severe hypoglycemia)##
+("entity"<|>Antiepileptic Drugs<|>DRUG<|>Antiepileptic drugs (e.g., benzodiazepines, phenytoin) are used to control seizures but are ineffective until underlying hypoglycemia is corrected)##
+("entity"<|>Mannitol<|>DRUG<|>Mannitol is an osmotic diuretic sometimes used to reduce cerebral edema in DKA, though often ineffective)##
+("entity"<|>Dexamethasone<|>DRUG<|>Dexamethasone is a glucocorticoid occasionally trialed to mitigate cerebral edema in DKA)##
+("entity"<|>Urea<|>DRUG<|>Urea has been experimentally used to treat cerebral edema in severe hyperglycemic states)##
+("entity"<|>Thiazides<|>DRUG<|>Thiazide diuretics increase urinary calcium excretion and can impair glucose tolerance, acting as a risk factor for HHS)##
+("entity"<|>Corticosteroids<|>DRUG<|>Corticosteroids raise blood glucose and precipitate hyperosmolar states in diabetic patients)##
+("entity"<|>Phenytoin<|>DRUG<|>Phenytoin interferes with insulin secretion and can aggravate hyperglycemia, serving as a risk factor for HHS)##
+("entity"<|>Isotonic Saline<|>PROCEDURE<|>Rapid intravenous infusion of isotonic saline is the first-line fluid replacement in DKA and HHS to restore intravascular volume)##
+("entity"<|>Potassium Replacement<|>PROCEDURE<|>Potassium supplementation is required during insulin therapy for DKA/HHS to prevent hypokalemia)##
+("entity"<|>Fluid Restriction<|>PROCEDURE<|>Cautious fluid administration is essential in HHS to avoid cerebral edema)##
+("entity"<|>Serum Electrolytes Monitoring<|>PROCEDURE<|>Serial measurement of sodium, potassium, chloride, and bicarbonate guides therapy in DKA/HHS)##
+("entity"<|>Seizure<|>SYMPTOM<|>Seizure is a neurologic manifestation of severe hypoglycemia, hyperglycemia, or electrolyte disturbances)##
+("entity"<|>Tremor<|>SYMPTOM<|>Tremor is a fine shaking often reported in functional hypoglycemia)##
+("entity"<|>Headache<|>SYMPTOM<|>Headache accompanies hypoglycemia and hyperosmolar states)##
+("entity"<|>Malaise<|>SYMPTOM<|>Malaise is a nonspecific feeling of discomfort and weakness common in hypoglycemia)##
+("entity"<|>Fatigue<|>SYMPTOM<|>Fatigue is a prominent symptom of both hypoglycemia and hyperosmolar hyperglycemic states)##
+("entity"<|>Nervousness<|>SYMPTOM<|>Nervousness or anxiety is reported during functional hypoglycemia)##
+("entity"<|>Polyuria<|>SYMPTOM<|>Excessive urination is a classic sign of hyperosmolar hyperglycemia and DKA)##
+("entity"<|>Dehydration<|>SYMPTOM<|>Dehydration results from osmotic diuresis in DKA/HHS)##
+("entity"<|>Kussmaul Respiration<|>SYMPTOM<|>Deep, rapid breathing pattern reflecting metabolic acidosis in DKA)##
+("entity"<|>Coma<|>SYMPTOM<|>Loss of consciousness can occur in severe DKA, HHS, or profound hypoglycemia)##
+("entity"<|>Hemiparesis<|>SYMPTOM<|>Weakness of one side of the body may mimic stroke in hyperglycemic encephalopathy)##
+("entity"<|>Hemianopsia<|>SYMPTOM<|>Loss of half of the visual field may appear in severe metabolic encephalopathies)##
+("entity"<|>Elderly DIABETIC PATIENTS<|>POPULATION<|>Older adults with diabetes who are predisposed to hyperosmolar nonketotic hyperglycemia)##
+("entity"<|>Children<|>POPULATION<|>Pediatric patients who may develop cerebral edema during DKA treatment)##
+("entity"<|>Diabetic PATIENTS<|>POPULATION<|>Individuals with type 1 or type 2 diabetes at risk for DKA, HHS, and hypoglycemia)##
+("entity"<|>Alcohol‑Related LIVER DISEASE<|>DISEASE<|>Spectrum of liver injury from steatosis to hepatitis and cirrhosis caused by chronic ethanol exposure; mentioned in context of NADH‑mediated metabolic disturbances)##
+("entity"<|>Steatosis<|>DISEASE<|>Hepatic fat accumulation (fatty liver) representing early, reversible stage of alcohol‑related liver disease)##
+("entity"<|>Alcoholic Hepatitis<|>DISEASE<|>Inflammatory liver injury due to chronic alcohol use, may be reversible)##
+("entity"<|>Cirrhosis<|>DISEASE<|>Irreversible fibrotic scarring of liver architecture resulting from chronic alcohol injury)##
+("entity"<|>Serotonin<|>BIOMARKER<|>Serotonin released from activated platelets causes vasoconstriction and platelet aggregation; associated with well‑being)##
+("entity"<|>Platelets<|>ANATOMICAL_STRUCTURE<|>Platelets are blood elements that store and release serotonin during activation)##
+("entity"<|>Monoamine Oxidase<|>ENZYME<|>Monoamine oxidase degrades serotonin to 5‑hydroxyindoleacetic acid)##
+("entity"<|>5‑Hydroxyindoleacetic Acid<|>BIOMARKER<|>Metabolite of serotonin measured in urine)##
+("entity"<|>Catechol‑O‑Methyltransferase<|>ENZYME<|>Catechol‑O‑methyltransferase catalyzes methylation of catecholamines during degradation)##
+("entity"<|>Nicotinamide Adenine Dinucleotide (NAD+)<|>BIOMARKER<|>Oxidized cofactor required for glycolysis and fatty‑acid oxidation; depletion (rise in NADH) impairs metabolism)##
+("entity"<|>Nicotinamide Adenine Dinucleotide (NADH)<|>BIOMARKER<|>Reduced cofactor that accumulates during ethanol metabolism, inhibiting glycolysis and promoting lactate formation)##
+("entity"<|>Lactate Dehydrogenase<|>ENZYME<|>Enzyme that converts pyruvate to lactate when NADH is high)##
+("entity"<|>Pentose Phosphate Pathway<|>CLASSIFICATION<|>Metabolic pathway that generates NADPH for biosynthetic reactions and cytochrome P450 activity)##
+("entity"<|>Cytochrome P450 (CYP)<|>ENZYME<|>A family of monooxygenases involved in drug metabolism and synthesis of steroid hormones, bile acids, and vitamin D)##
+("entity"<|>Glutathione Peroxidase<|>ENZYME<|>Enzyme that reduces reactive oxygen species using glutathione, protecting cells from oxidative damage)##
+("entity"<|>Glutathione<|>BIOMARKER<|>Antioxidant molecule oxidized during detoxification reactions)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>MALAISE<|>Functional hypoglycemia produces malaise as a cardinal symptom<|>9)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>FATIGUE<|>Functional hypoglycemia causes fatigue during the symptomatic episode<|>9)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>NERVOUSNESS<|>Nervousness is reported in patients with functional hypoglycemia<|>8)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>HEADACHE<|>Headache is among the symptoms of functional hypoglycemia<|>8)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>TREMOR<|>Tremor may accompany functional hypoglycemia<|>7)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>CHRONIC FATIGUE SYNDROME<|>Functional hypoglycemia is often misdiagnosed as chronic fatigue syndrome<|>6)##
+("relationship"<|>FUNCTIONAL HYPOGLYCEMIA<|>ANXIETY SYNDROME<|>Symptoms of functional hypoglycemia may be confused with anxiety syndrome<|>6)##
+("relationship"<|>HYPOGLYCEMIC ENCEPHALOPATHY<|>CEREBRAL CORTEX<|>Hypoglycemic encephalopathy primarily damages the cerebral cortex<|>9)##
+("relationship"<|>HYPOGLYCEMIC ENCEPHALOPATHY<|>SEIZURE<|>Seizures are a common neurologic manifestation of hypoglycemic encephalopathy<|>8)##
+("relationship"<|>HYPOGLYCEMIC ENCEPHALOPATHY<|>TREMOR<|>Tremor may be observed in hypoglycemic encephalopathy<|>6)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>BLOOD GLUCOSE<|>DKA is defined by severe hyperglycemia (>400 mg/dL)<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>BLOOD pH<|>DKA features metabolic acidosis with pH < 7.20<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>SERUM BICARBONATE<|>DKA is characterized by low serum bicarbonate (<10 mEq/L)<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>KETONE BODIES<|>Elevated ketone bodies are a hallmark of DKA<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>β‑HYDROXYBUTYRIC ACID<|>β‑Hydroxybutyric acid rises markedly in DKA<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>Glycosuria<|>Excess glucose spills into urine in DKA<|>8)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>KUSSMAUL RESPIRATION<|>Deep breathing pattern reflects compensation for metabolic acidosis in DKA<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>DEHYDRATION<|>Osmotic diuresis causes dehydration in DKA<|>8)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>COMA<|>Severe DKA may progress to coma<|>8)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>INSULIN<|>Insulin administration corrects hyperglycemia and ketosis in DKA<|>10)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>ISOTONIC SALINE<|>Fluid resuscitation with isotonic saline restores intravascular volume in DKA<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>POTASSIUM REPLACEMENT<|>Potassium supplementation is required during insulin therapy for DKA<|>9)##
+("relationship"<|>DIABETIC KETOACIDOSIS<|>THIAZIDES<|>Thiazide diuretics can precipitate hyperglycemia and increase risk of DKA<|>4)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>BLOOD GLUCOSE<|>HHS is defined by extreme hyperglycemia (>600 mg/dL)<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>SERUM OSMOLALITY<|>Serum osmolality >330 mOsm/L characterizes HHS<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>DEHYDRATION<|>Severe dehydration is a central feature of HHS<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>POLYURIA<|>Polyuria from osmotic diuresis contributes to dehydration in HHS<|>8)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>ELDERLY DIABETIC PATIENTS<|>Elderly diabetics are the population most affected by HHS<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>CORTICOSTEROIDS<|>Corticosteroid therapy can precipitate HHS by raising glucose levels<|>6)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>PHENYTOIN<|>Phenytoin interferes with insulin release and can trigger HHS<|>5)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>THIAZIDES<|>Thiazide diuretics impair glucose tolerance increasing HHS risk<|>5)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>ISOTONIC SALINE<|>Cautious isotonic saline infusion restores volume while avoiding cerebral edema in HHS<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>INSULIN<|>Low‑dose insulin infusion lowers glucose in HHS<|>9)##
+("relationship"<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>POTASSIUM REPLACEMENT<|>Potassium must be corrected during insulin therapy for HHS<|>8)##
+("relationship"<|>SEIZURE<|>ANTIEPILYPTIC DRUGS<|>Antiepileptic drugs are used to control seizures but are ineffective until hypoglycemia is corrected<|>7)##
+("relationship"<|>SEIZURE<|>HYPOGLYCEMIC ENCEPHALOPATHY<|>Seizures are a manifestation of severe hypoglycemic brain injury<|>8)##
+("relationship"<|>SERUM LACTATE<|>HYPERGLYCEMIC ENCEPHALOPATHY<|>Elevated lactate contributes to metabolic acidosis in hyperglycemic encephalopathy<|>6)##
+("relationship"<|>SERUM URIC ACID<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Hyperuricemia occurs in HHS due to reduced renal excretion<|>7)##
+("relationship"<|>PROTHROMBIN TIME (PT)<|>ALCOHOL‑RELATED LIVER DISEASE<|>PT prolongation indicates impaired synthetic function in cirrhosis<|>8)##
+("relationship"<|>STEATOSIS<|>ALCOHOL‑RELATED LIVER DISEASE<|>Steatosis is the earliest, reversible stage of alcohol‑related liver injury<|>9)##
+("relationship"<|>ALCOHOLIC HEPATITIS<|>ALCOHOL‑RELATED LIVER DISEASE<|>Alcoholic hepatitis is an inflammatory stage of alcohol‑related liver disease<|>9)##
+("relationship"<|>CIRRHOSIS<|>ALCOHOL‑RELATED LIVER DISEASE<|>Cirrhosis represents the irreversible end‑stage of chronic alcohol injury<|>9)##
+("relationship"<|>NADH<|>GLYCOLYSIS INHIBITION<|>Elevated NADH from ethanol metabolism inhibits glyceraldehyde‑3‑phosphate dehydrogenase, slowing glycolysis<|>8)##
+("relationship"<|>NADH<|>LACTATE<|>Excess NADH drives conversion of pyruvate to lactate via lactate dehydrogenase<|>9)##
+("relationship"<|>LACTATE<|>HYPERURICEMIA<|>Increased lactate reduces renal uric acid excretion, contributing to hyperuricemia<|>6)##
+("relationship"<|>SEROTONIN<|>PLATELETS<|>Activated platelets release serotonin into the bloodstream<|>9)##
+("relationship"<|>SEROTONIN<|>VASOCONSTRICTION<|>Serotonin induces vasoconstriction and platelet aggregation<|>8)##
+("relationship"<|>SEROTONIN<|>WELL‑BEING<|>Serotonin is associated with the feeling of well‑being<|>7)##
+("relationship"<|>SEROTONIN<|>5‑HYDROXYINDOLEACETIC ACID<|>Serotonin is degraded to 5‑HIAA by monoamine oxidase<|>8)##
+("relationship"<|>CYP ENZYMES<|>NADPH<|>Cytochrome P450 activity requires NADPH generated by the pentose phosphate pathway<|>9)##
+("relationship"<|>CYP ENZYMES<|>DETOXIFICATION<|>CYP enzymes in the smooth endoplasmic reticulum detoxify xenobiotics and drug metabolites<|>9)##
+("relationship"<|>GLUTATHIONE PEROXIDASE<|>GLUTATHIONE<|>Glutathione peroxidase uses reduced glutathione to neutralize reactive oxygen species<|>9)##
+("relationship"<|>GLUTATHIONE<|>OXIDATIVE STRESS PROTECTION<|>Glutathione protects cells from oxidative damage during metabolic stress<|>8)##
+("relationship"<|>MONOAMINE OXIDASE<|>SEROTONIN DEGRADATION<|>Monoamine oxidase catalyzes oxidative deamination of serotonin to 5‑HIAA<|>9)##
+("relationship"<|>CATECHOL‑O‑METHYLTRANSFERASE<|>CATECHOLAMINE METABOLISM<|>Catechol‑O‑methyltransferase methylates catecholamines during their degradation<|>8)##
+("relationship"<|>THIAZIDES<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Thiazides can precipitate HHS by increasing glucose reabsorption and impairing insulin sensitivity<|>6)##
+("relationship"<|>CORTICOSTEROIDS<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Corticosteroids raise hepatic gluconeogenesis and antagonize insulin, predisposing to HHS<|>6)##
+("relationship"<|>PHENYTOIN<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Phenytoin impairs insulin secretion, increasing risk of severe hyperglycemia<|>5)##
+("relationship"<|>INSULIN<|>SEIZURE<|>Adequate insulin therapy resolves seizures caused by hypoglycemia<|>8)##
+("relationship"<|>ISOTONIC SALINE<|>CEREBRAL EDEMA<|>Rapid fluid administration without caution may worsen cerebral edema in severe hyperglycemia<|>5)##
+("relationship"<|>POTASSIUM REPLACEMENT<|>SEIZURE<|>Correcting hypokalemia helps prevent seizure recurrence during DKA/HHS treatment<|>6)##
+("relationship"<|>SERUM ELECTROLYTES MONITORING<|>DIABETIC KETOACIDOSIS<|>Electrolyte trends guide therapy and prevent complications in DKA<|>8)##
+("relationship"<|>SERUM ELECTROLYTES MONITORING<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Monitoring electrolytes is essential to avoid sudden shifts during HHS treatment<|>8)##
+("relationship"<|>DIABETIC PATIENTS<|>DIABETIC KETOACIDOSIS<|>Diabetic individuals are at risk of developing DKA<|>10)##
+("relationship"<|>DIABETIC PATIENTS<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Diabetics, especially the elderly, may develop HHS<|>9)##
+("relationship"<|>ELDERLY DIABETIC PATIENTS<|>HYPEROSMOLAR NONKETOTIC HYPERGLYCEMIA<|>Advanced age is a key risk factor for HHS in diabetics<|>9)##
+("relationship"<|>CHILDREN<|>DIABETIC KETOACIDOSIS<|>Pediatric patients are susceptible to cerebral edema during DKA treatment<|>8)##
+("relationship"<|>ALCOHOL‑RELATED LIVER DISEASE<|>NADH<|>Ethanol metabolism raises NADH, contributing to hepatic steatosis<|>8)##
+("relationship"<|>STEATOSIS<|>NADH<|>Elevated NADH from alcohol metabolism promotes fatty acid synthesis leading to steatosis<|>8)##
+("relationship"<|>ALCOHOLIC HEPATITIS<|>NADH<|>Increased NADH impairs β‑oxidation, fostering inflammatory liver injury<|>7)##
+("relationship"<|>CIRRHOSIS<|>NADH<|>Chronic NADH excess from ethanol contributes to progressive fibrotic remodeling of the liver<|>7)##
+("relationship"<|>PROTHROMBIN TIME (PT)<|>CIRRHOSIS<|>PT prolongation reflects diminished synthesis of clotting factors in cirrhosis<|>9)##
+("relationship"<|>PROTHROMBIN TIME (PT)<|>ALCOHOLIC HEPATITIS<|>PT may be prolonged in acute alcoholic hepatitis due to impaired hepatic function<|>7)##
+("relationship"<|>PROTHROMBIN TIME (PT)<|>STEATOSIS<|>Early steatosis can modestly affect PT, but changes become more pronounced with progression<|>5)##
+("relationship"<|>SEIZURE<|>HYPERGLYCEMIC ENCEPHALOPATHY<|>Seizures are common in hyperglycemic encephalopathy as well as hypoglycemic encephalopathy<|>6)##
+("relationship"<|>HEMIPARESIS<|>HYPERGLYCEMIC ENCEPHALOPATHY<|>Focal neurological deficits such as hemiparesis may mimic stroke in severe hyperglycemia<|>6)##
+("relationship"<|>HEMIANOPSIA<|>HYPERGLYCEMIC ENCEPHALOPATHY<|>Visual field defects can appear in metabolic encephalopathies<|>5)##
+<|COMPLETE|>
+#############################
+
+
 Example 2:
-Entity_types: ORGANIZATION
-Text:
-TechGlobal's (TG) stock skyrocketed in its opening day on the Global Exchange Thursday. But IPO experts warn that the semiconductor corporation's debut on the public markets isn't indicative of how other newly listed companies may perform.
 
-TechGlobal, a formerly public company, was taken private by Vision Holdings in 2014. The well-established chip designer says it powers 85% of premium smartphones.
-######################
-Output:
-("entity"<|>TECHGLOBAL<|>ORGANIZATION<|>TechGlobal is a stock now listed on the Global Exchange which powers 85% of premium smartphones)
-##
-("entity"<|>VISION HOLDINGS<|>ORGANIZATION<|>Vision Holdings is a firm that previously owned TechGlobal)
-##
-("relationship"<|>TECHGLOBAL<|>VISION HOLDINGS<|>Vision Holdings formerly owned TechGlobal from 2014 until present<|>5)
+entity_types: [disease, risk_factor, gene, inheritance_pattern, anatomical_structure, laboratory_test, imaging_modality, procedure, drug, biomarker, classification, symptom, population]
+text:
+ examination is usually normal in patients with cholangiocarcinoma. Occasionally, asymptomatic patients are found to have cholangiocarcinoma while being evaluated for elevated liver function tests. Tumor markers, such as CA 125 and carcinoembryonic antigen (CEA), can be elevated in cholangiocarcinoma but tend to be nonspecific because they also increase in other GI and gynecologic malignancies. The tumor marker most commonly used to aid the diagnosis of chol-angiocarcinoma is CA 19-9, which has a sensitivity of 79% and specificity of 98% if the serum value is >129 U/mL.89 How-ever, mild elevations in CA 19-9 can also be seen in cholangitis, biliary obstruction, other GI and gynecologic neoplasms, and patients who lack the Lewis blood type antigen.90The initial workup for suspected cholangiocarcinoma includes abdominal imaging with ultrasound or CT scanning. Perihilar tumors will cause dilatation of the intrahepatic bili-ary tree, but a normal or collapsed gallbladder and extrahepatic bile ducts distal to the tumor. Distal bile duct cancer will lead to dilatation of the extraand intrahepatic bile ducts as well as the gallbladder. Initial imaging is important to determine the level of obstruction and to rule out the presence of bile duct stones as the cause of the obstructive jaundice (Fig. 32-32). It is usually difficult to visualize the tumor itself on ultrasound, CT, or even MRCP, but any of these modalities can provide an outline of biliary anatomy, an estimate of the level of obstruc-tion, evaluation of portal vein patency, and screening for nearby lymphadenopathy. Detailed evaluation of the biliary anatomy and tumor itself is best completed through cholangiography. ERCP is generally adequate, but in cases where the proximal extent of the tumor remains in question, PTC may be required to determine resectability.Tissue diagnosis may be difficult to obtain. Current diag-nostic techniques including fine-needle aspiration (percutaneous or endoscopic), and biliary brushings have been shown to have a low sensitivity in detecting malignancy, anywhere between 15% and 60%. Choledochoscopy with direct visualization and sam-pling of intraluminal masses may be able to improve diagnosis rates but is only available in specialized centers (see Fig. 32-10). Patients with potentially resectable disease should, therefore, be offered surgical exploration based on radiographic findings and clinical suspicion.91Type IIIbType IIType IType IVType IIIaFigure 32-31. Bismuth-Corlette classification of perihilar bile duct tumors (Klatskin tumors).Brunicardi_Ch32_p1393-p1428.indd   142311/02/19   2:44 PM 1424SPECIFIC CONSIDERATIONSPART IITreatment. Surgical excision is the only potentially cura-tive treatment for cholangiocarcinoma. In the past one to two decades, improvements in surgical techniques have resulted in lower mortality and better outcomes for patients undergoing aggressive surgical excision for cholangiocarcinoma.92Despite improvements in ultrasonography, CT scanning, and MRI, more than one-half of patients who are explored are found to have peritoneal implants, nodal or hepatic metastasis, or locally advanced disease that precludes resection. Patients suspected of having resectable disease should first undergo diagnostic laparoscopy. Those who are found to have previously unidentified metastatic disease should undergo cholecystectomy and surgical bypass for biliary decompression.93For curative resection, the location and local exten-sion of the tumor dictates the extent of the surgery required. Distal bile duct tumors are often resectable but may require pancreaticoduodenectomy (Whipple procedure). For patients with distal bile duct cancer found to be unresectable on sur-gical exploration, Roux-en-Y hepaticojejunostomy, chole-cystectomy, and gastrojejunostomy to prevent gastric outlet obstruction should be performed. Perihilar tumors involving the bifurcation or proximal common hepatic duct (Bismuth-Corlette type I or II) with no signs of vascular involvement are candidates for local tumor excision with portal lymphadenec-tomy, cholecystectomy, common bile duct excision, and bilat-eral Roux-en-Y hepaticojejunostomies. If the tumor involves the right or left hepatic duct (Bismuth-Corlette type IIIa or IIIb), right or left hepatic lobectomy, respectively, should also be performed. Frequently, resection of the adjacent caudate lobe is required because of direct extension into caudate bili-ary radicals or parenchyma.91 Type IV Klatskin tumors, those with more extensive involvement of both hepatic ducts and intrahepatic spread, are often considered unresectable or only treatable with liver transplantation.The best outcomes in perihilar cholangiocarcinoma are seen in patients who undergo neoadjuvant chemoradiation followed by liver transplantation. However, there are very strict inclusion criteria for transplantation, and few patients qualify.88 Patients with primary sclerosing cholangitis who develop chol-angiocarcinoma should be treated with liver transplant when-ever possible.Nonoperative biliary decompression can be performed for patients with unresectable disease on initial presentation. Endoscopic placement of expandable metal stents is often the preferred approach. For very proximal or intrahepatic tumors, percut
+------------------------
+output:
+("entity"<|>DIABETES<|>disease<|>A metabolic disorder characterized by chronic hyperglycemia due to deficient insulin secretion, insulin resistance, or both, leading to systemic complications)##
+("entity"<|>STEATORRHEA<|>symptom<|>Fatty, foul‑smelling stool caused by maldigestion of dietary fat, often reflecting exocrine pancreatic insufficiency)##
+("entity"<|>TROPONINS<|>biomarker<|>Cardiac muscle proteins that appear in the bloodstream when myocardial or other tissue injury occurs; can be elevated in pancreatic injury)##
+("entity"<|>TRANSAMINASES<|>biomarker<|>Liver enzymes (ALT, AST) that rise in the blood when hepatocytes or pancreatic cells are damaged)##
+("entity"<|>SECRETIN<|>drug<|>A peptide hormone administered therapeutically to stimulate the exocrine pancreas to secrete bicarbonate‑rich pancreatic juice)##
+("entity"<|>PANCREATITIS<|>disease<|>Inflammation of the pancreas that can be acute or chronic, frequently precipitated by gallstones, alcohol, or hypertriglyceridemia)##
+("entity"<|>HYPERTRIGLYCERIDEMIA<|>disease<|>A disorder characterized by markedly elevated plasma triglyceride levels, predisposing to pancreatitis and cardiovascular disease)##
+("entity"<|>LIPOPROTEIN LIPASE DEFICIENCY<|>disease<|>A hereditary deficiency of the enzyme lipoprotein lipase leading to impaired triglyceride clearance and severe hypertriglyceridemia)##
+("entity"<|>APOLIPOPROTEIN C‑II DEFICIENCY<|>disease<|>A genetic deficiency of apolipoprotein C‑II, the co‑factor for lipoprotein lipase, causing secondary hypertriglyceridemia)##
+("entity"<|>HEPATIC STEATOSIS<|>disease<|>Accumulation of fat within hepatocytes (fatty liver), often the first reversible stage of alcohol‑related liver disease)##
+("entity"<|>ALCOHOL‑RELATED HEPATITIS<|>disease<|>Inflammatory liver injury caused by excessive alcohol consumption, which may progress to cirrhosis)##
+("entity"<|>CIRRHOSIS<|>disease<|>End‑stage chronic liver disease marked by fibrosis, nodular regeneration, and loss of hepatic synthetic function)##
+("entity"<|>HYPERURICEMIA<|>disease<|>Elevated serum uric acid concentration that can precipitate crystal formation and gout attacks)##
+("entity"<|>GOUT<|>disease<|>Inflammatory arthritis caused by monosodium urate crystal deposition in joints, driven by hyperuricemia)##
+("entity"<|>PROTHROMBIN TIME<|>laboratory_test<|>A coagulation assay measuring the time required for plasma to clot after addition of tissue factor, reflecting hepatic synthesis of clotting factors)##
+("entity"<|>EXOCRINE PANCREAS<|>anatomical_structure<|>The portion of the pancreas that secretes digestive enzymes and bicarbonate into the duodenum)##
+("entity"<|>ENDOCRINE PANCREAS<|>anatomical_structure<|>The islet cell component of the pancreas that produces hormones such as insulin and glucagon)##
+("entity"<|>ELDERLY DIABETICS<|>population<|>Older adults who have a diagnosis of diabetes mellitus)##
+("entity"<|>INDIVIDUALS WITH HYPERTRIGLYCERIDEMIA<|>population<|>People who have clinically significant elevation of plasma triglycerides)##
+
+("relationship"<|>DIABETES<|>STEATORRHEA<|>Diabetes, especially when insulin is deficient, can impair fat digestion and lead to fatty stools (steatorrhea)<|>8)##
+("relationship"<|>DIABETES<|>ELDERLY DIABETICS<|>Elderly diabetics constitute a population affected by the disease of diabetes<|>7)##
+("relationship"<|>HYPERTRIGLYCERIDEMIA<|>PANCREATITIS<|>Hypertriglyceridemia is a well‑established risk factor for acute pancreatitis<|>9)##
+("relationship"<|>HYPERTRIGLYCERIDEMIA<|>INDIVIDUALS WITH HYPERTRIGLYCERIDEMIA<|>These individuals form the population characterized by hypertriglyceridemia<|>7)##
+("relationship"<|>INDIVIDUALS WITH HYPERTRIGLYCERIDEMIA<|>PANCREATITIS<|>People with hypertriglyceridemia have a markedly increased risk of developing pancreatitis<|>8)##
+("relationship"<|>PANCREATITIS<|>TROPONINS<|>Pancreatic inflammation can cause release of troponins into the circulation, serving as a biomarker of tissue injury<|>6)##
+("relationship"<|>PANCREATITIS<|>TRANSAMINASES<|>Acute pancreatitis frequently leads to elevated serum transaminases owing to pancreatic cell damage<|>7)##
+("relationship"<|>SECRETIN<|>EXOCRINE PANCREAS<|>Secretin acts on the exocrine pancreas to stimulate secretion of bicarbonate‑rich pancreatic juice<|>9)##
+("relationship"<|>EXOCRINE PANCREAS<|>STEATORRHEA<|>Insufficient exocrine pancreatic enzyme output results in malabsorption of fat and consequent steatorrhea<|>8)##
+("relationship"<|>ENDOCRINE PANCREAS<|>DIABETES<|>Failure of the endocrine pancreas to produce adequate insulin is the primary pathophysiologic basis of diabetes mellitus<|>9)##
+("relationship"<|>CIRRHOSIS<|>PROTHROMBIN TIME<|>Cirrhosis impairs hepatic synthesis of clotting factors, leading to a prolonged prothrombin time<|>8)##
+("relationship"<|>HEPATIC STEATOSIS<|>ALCOHOL‑RELATED HEPATITIS<|>Fatty liver (steatosis) is the initial, potentially reversible stage that can evolve into alcohol‑related hepatitis<|>7)##
+("relationship"<|>ALCOHOL‑RELATED HEPATITIS<|>CIRRHOSIS<|>Sustained alcohol‑related hepatitis frequently progresses to irreversible cirrhosis<|>8)##
+("relationship"<|>HYPERURICEMIA<|>GOUT<|>Elevated serum uric acid (hyperuricemia) precipitates monosodium urate crystals, causing gout attacks<|>9)##
+("relationship"<|>LIPOPROTEIN LIPASE DEFICIENCY<|>HYPERTRIGLYCERIDEMIA<|>Deficiency of lipoprotein lipase impairs triglyceride clearance, producing severe hypertriglyceridemia<|>8)##
+("relationship"<|>APOLIPOPROTEIN C‑II DEFICIENCY<|>HYPERTRIGLYCERIDEMIA<|>Apolipoprotein C‑II deficiency reduces lipoprotein lipase activity, leading to hypertriglyceridemia<|>8)##
+("relationship"<|>HYPERTRIGLYCERIDEMIA<|>PANCREATITIS<|>Elevated triglyceride levels increase the viscosity of pancreatic secretions and predispose to ductal obstruction, triggering pancreatitis<|>9)##
+
 <|COMPLETE|>
+#############################
 
-######################
-Example 3:
-Entity_types: ORGANIZATION,GEO,PERSON
-Text:
-Five Aurelians jailed for 8 years in Firuzabad and widely regarded as hostages are on their way home to Aurelia.
 
-The swap orchestrated by Quintara was finalized when $8bn of Firuzi funds were transferred to financial institutions in Krohaara, the capital of Quintara.
 
-The exchange initiated in Firuzabad's capital, Tiruzia, led to the four men and one woman, who are also Firuzi nationals, boarding a chartered flight to Krohaara.
-
-They were welcomed by senior Aurelian officials and are now on their way to Aurelia's capital, Cashion.
-
-The Aurelians include 39-year-old businessman Samuel Namara, who has been held in Tiruzia's Alhamia Prison, as well as journalist Durke Bataglani, 59, and environmentalist Meggie Tazbah, 53, who also holds Bratinas nationality.
-######################
-Output:
-("entity"<|>FIRUZABAD<|>GEO<|>Firuzabad held Aurelians as hostages)
-##
-("entity"<|>AURELIA<|>GEO<|>Country seeking to release hostages)
-##
-("entity"<|>QUINTARA<|>GEO<|>Country that negotiated a swap of money in exchange for hostages)
-##
-##
-("entity"<|>TIRUZIA<|>GEO<|>Capital of Firuzabad where the Aurelians were being held)
-##
-("entity"<|>KROHAARA<|>GEO<|>Capital city in Quintara)
-##
-("entity"<|>CASHION<|>GEO<|>Capital city in Aurelia)
-##
-("entity"<|>SAMUEL NAMARA<|>PERSON<|>Aurelian who spent time in Tiruzia's Alhamia Prison)
-##
-("entity"<|>ALHAMIA PRISON<|>GEO<|>Prison in Tiruzia)
-##
-("entity"<|>DURKE BATAGLANI<|>PERSON<|>Aurelian journalist who was held hostage)
-##
-("entity"<|>MEGGIE TAZBAH<|>PERSON<|>Bratinas national and environmentalist who was held hostage)
-##
-("relationship"<|>FIRUZABAD<|>AURELIA<|>Firuzabad negotiated a hostage exchange with Aurelia<|>2)
-##
-("relationship"<|>QUINTARA<|>AURELIA<|>Quintara brokered the hostage exchange between Firuzabad and Aurelia<|>2)
-##
-("relationship"<|>QUINTARA<|>FIRUZABAD<|>Quintara brokered the hostage exchange between Firuzabad and Aurelia<|>2)
-##
-("relationship"<|>SAMUEL NAMARA<|>ALHAMIA PRISON<|>Samuel Namara was a prisoner at Alhamia prison<|>8)
-##
-("relationship"<|>SAMUEL NAMARA<|>MEGGIE TAZBAH<|>Samuel Namara and Meggie Tazbah were exchanged in the same hostage release<|>2)
-##
-("relationship"<|>SAMUEL NAMARA<|>DURKE BATAGLANI<|>Samuel Namara and Durke Bataglani were exchanged in the same hostage release<|>2)
-##
-("relationship"<|>MEGGIE TAZBAH<|>DURKE BATAGLANI<|>Meggie Tazbah and Durke Bataglani were exchanged in the same hostage release<|>2)
-##
-("relationship"<|>SAMUEL NAMARA<|>FIRUZABAD<|>Samuel Namara was a hostage in Firuzabad<|>2)
-##
-("relationship"<|>MEGGIE TAZBAH<|>FIRUZABAD<|>Meggie Tazbah was a hostage in Firuzabad<|>2)
-##
-("relationship"<|>DURKE BATAGLANI<|>FIRUZABAD<|>Durke Bataglani was a hostage in Firuzabad<|>2)
-<|COMPLETE|>
-
-######################
 -Real Data-
 ######################
-Entity_types: {entity_types}
-Text: {input_text}
+entity_types: [disease, risk_factor, gene, inheritance_pattern, anatomical_structure, laboratory_test, imaging_modality, procedure, drug, biomarker, classification, symptom, population]
+text: {input_text}
 ######################
-Output:
+output:

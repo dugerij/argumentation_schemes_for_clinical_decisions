@@ -209,8 +209,43 @@ __marimo__/
 .DS_Store
 
 
-# other
-cache/
+# Project-local secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Clinical/source data. Do not commit MIMIC-IV, guideline scrapes, or derived PHI.
 data/
+raw/
+processed/
+datasets/
+exports/
+
+# GraphRAG/generated artifacts
+cache/
 logs/
 output/
+*.parquet
+*.graphml
+*.lance
+*.lancedb/
+lancedb/
+
+# Framework runtime records
+logs/framework/
+*.jsonl
+
+# Local API/runtime files
+.uvicorn/
+*.pid
+
+# Local model/vector artifacts
+models/
+checkpoints/
+*.gguf
+*.safetensors
+*.bin

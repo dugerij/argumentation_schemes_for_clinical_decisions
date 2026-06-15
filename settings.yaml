@@ -10,8 +10,10 @@ completion_models:
     model: ${GENERATOR_MODEL}
     auth_method: ${COMPLETION_MODEL_AUTH_TYPE}
     api_key: ${GRAPHRAG_API_KEY} # set this in the generated .env file, or remove if managed identity
-    retry:
-      type: exponential_backoff
+    retry_strategy: native
+    max_retries: -1                   # set to -1 for dynamic retry logic (most optimal setting based on server response)
+    tokens_per_minute: 0              # set to 0 to disable rate limiting
+    requests_per_minute: 0    
 
 embedding_models:
   default_embedding_model:
@@ -19,8 +21,12 @@ embedding_models:
     model: ${RAG_EMBEDDING_MODEL}
     auth_method: ${EMBEDDING_MODEL_AUTH_TYPE}
     api_key: ${GRAPHRAG_API_KEY}
-    retry:
-      type: exponential_backoff
+    retry_strategy: native
+    max_retries: -1                   # set to -1 for dynamic retry logic (most optimal setting based on server response)
+    tokens_per_minute: 0              # set to 0 to disable rate limiting
+    requests_per_minute: 0    
+
+concurrent_requests: 3
 
 ### Document processing settings ###
 
@@ -29,7 +35,7 @@ input:
 
 chunking:
   type: tokens
-  size: 1200
+  size: 1000
   overlap: 100
   encoding_model: o200k_base
 
