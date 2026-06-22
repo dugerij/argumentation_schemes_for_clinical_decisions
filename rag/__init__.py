@@ -1,1 +1,1 @@
-"""GraphRAG indexing and retrieval helpers."""
+"""LlamaIndex indexing and retrieval helpers."""

@@ -2,7 +2,7 @@ import os
 import json
 
 
-VALID_PROVIDERS = {'ollama', 'openai', 'gemini', 'together_ai'}
+VALID_PROVIDERS = {'ollama', 'openai', 'gemini', 'together_ai', 'vllm'}
 TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
@@ -24,6 +24,33 @@ def umls_enabled() -> bool:
     return os.environ.get("UMLS_ENABLED", "false").strip().lower() in TRUTHY
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in TRUTHY
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return int(value)
+
+
+def parse_optional_int(value: str | None, default: int | None = None) -> int | None:
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"all", "none", "null", "unlimited"}:
+        return None
+    return int(value)
+
+
+def env_optional_int(name: str, default: int | None = None) -> int | None:
+    return parse_optional_int(os.environ.get(name), default=default)
+
+
 def startup_check():
     """"Checks that all required environment variables are set and valid
     Raises:
@@ -36,11 +63,7 @@ def startup_check():
         'RAG_EMBEDDING_MODEL_PROVIDER',
         'RAG_EMBEDDING_MODEL',
         'INPUT_BASE_DIR',
-        'INPUT_STORAGE_TYPE',
         'OUTPUT_BASE_DIR',
-        'OUTPUT_STORAGE_TYPE',
-        'COMPLETION_MODEL_AUTH_TYPE',
-        'EMBEDDING_MODEL_AUTH_TYPE',
     ]
     
     for var in required_env_vars:
@@ -62,7 +85,7 @@ def startup_check():
     ]
     for provider in providers:
         if provider not in VALID_PROVIDERS:
-            raise ValueError("Invalid provider specified. Please choose from 'ollama', 'together_ai', 'openai', or 'gemini'.")
+            raise ValueError("Invalid provider specified. Please choose from 'ollama', 'together_ai', 'openai', 'gemini', or 'vllm'.")
 
     # Validate provider-specific credentials
     provider_vars = [

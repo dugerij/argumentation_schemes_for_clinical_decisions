@@ -218,7 +218,7 @@ __marimo__/
 *.p12
 *.pfx
 
-# Clinical/source data. Do not commit MIMIC-IV, guideline scrapes, or derived PHI.
+# Clinical/source data. Do not commit MIMIC-IV notes or derived PHI.
 data/
 raw/
 processed/

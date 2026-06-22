@@ -1,134 +1,60 @@
 import argparse
-import asyncio
-import subprocess
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-
-DEFAULT_DOMAIN = """
-clinical medicine, including basic medical sciences such as anatomy, biochemistry,
-physiology, pathophysiology, pathology and pharmacology; epidemiology; clinical
-symptomatology; examination findings; investigations and interpretation; disease
-progression and prognosis; treatment mechanisms, side effects, interactions, and
-patient-centered care.
-""".strip()
-
-CLINICAL_ARGUMENTATION_DOMAIN = """
-clinical medicine and evidence-based guideline reasoning over MIMIC-IV notes,
-NICE guidelines, WHO guidelines, and medical textbooks. Extract clinically
-relevant entities and relationships for auditable recommendation generation.
-Prefer UMLS/MEDCIN-aligned concepts where available, including diseases,
-symptoms, signs, medications, procedures, laboratory tests, findings,
-contraindications, adverse effects, complications, risk factors, clinical goals,
-guideline recommendations, and treatment relationships. The resulting graph will
-support formal argumentation schemes, medical critical questions, and Abstract
-Argumentation Framework adjudication of clinical conflicts.
-""".strip()
-
-
-def tune_prompts(
-    domain: str,
-    output: str,
-    selection_method: str,
-    limit: int,
-    max_tokens: int,
-    min_examples_required: int,
-    discover_entity_types: bool,
-    language: str,
-) -> None:
-    command = [
-        "graphrag",
-        "prompt-tune",
-        "--domain",
-        domain,
-        "--output",
-        output,
-        "--selection-method",
-        selection_method,
-        "--limit",
-        str(limit),
-        "--max-tokens",
-        str(max_tokens),
-        "--min-examples-required",
-        str(min_examples_required),
-        "--language",
-        language,
-    ]
-
-    if discover_entity_types:
-        command.append("--discover-entity-types")
-    else:
-        command.append("--no-discover-entity-types")
-
-    subprocess.run(command, check=True)
+from helpers.config import env_bool, env_optional_int, parse_optional_int, startup_check
+from rag.index import ensure_index
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="GraphRAG indexing utilities.")
+    parser = argparse.ArgumentParser(description="Indexing and evidence ingestion utilities.")
     parser.add_argument(
         "command",
-        choices=("build", "prompt-tune", "prompt-tune-clinical"),
-        help="Run GraphRAG indexing or prompt tuning.",
+        choices=("build", "build-schema", "extract-mimic-discharge"),
+        help="Build the index, build the schema-guided index, or extract a MIMIC discharge subset.",
     )
-    parser.add_argument("--config", default="settings.yaml", help="Path to GraphRAG settings YAML.")
-    parser.add_argument("--method", default="standard", help="GraphRAG indexing method.")
-    parser.add_argument("--domain", default=DEFAULT_DOMAIN, help="Domain text for prompt tuning.")
-    parser.add_argument("--output", default="prompts", help="Prompt output directory relative to project root.")
-    parser.add_argument(
-        "--selection-method",
-        default="auto",
-        choices=("all", "random", "top", "auto"),
-        help="Text chunk selection method for prompt tuning.",
-    )
-    parser.add_argument("--limit", type=int, default=30, help="Number of documents to load for prompt tuning.")
-    parser.add_argument("--max-tokens", type=int, default=4000, help="Maximum token budget for prompt generation.")
-    parser.add_argument(
-        "--min-examples-required",
-        type=int,
-        default=3,
-        help="Minimum examples to generate/include in the extraction prompt.",
-    )
-    parser.add_argument("--language", default="English", help="Primary prompt language.")
-    parser.add_argument(
-        "--discover-entity-types",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Allow GraphRAG to discover entity types during prompt tuning.",
-    )
+    parser.add_argument("--input-dir", default=None, help="Directory containing source .txt files.")
+    parser.add_argument("--output-dir", default=None, help="Directory used to persist the index.")
+    parser.add_argument("--limit", default="25", help="Maximum number of MIMIC notes to extract, or 'all'.")
+    parser.add_argument("--csv-path", default=None, help="MIMIC discharge CSV to subset.")
+    parser.add_argument("--max-chars", default="6000", help="Maximum characters per extracted note, or 'all'.")
+    parser.add_argument("--note-type", default="DS", help="MIMIC note type to keep.")
     return parser.parse_args()
 
 
 def main() -> None:
     load_dotenv()
+    startup_check()
     args = parse_args()
 
-    if args.command == "build":
-        from rag.index import build_graphrag_index
+    input_dir = Path(args.input_dir or os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
+    output_dir = Path(args.output_dir or os.environ.get("OUTPUT_BASE_DIR", "output"))
 
-        asyncio.run(build_graphrag_index(Path(args.config), args.method))
-    elif args.command == "prompt-tune":
-        tune_prompts(
-            domain=args.domain,
-            output=args.output,
-            selection_method=args.selection_method,
-            limit=args.limit,
-            max_tokens=args.max_tokens,
-            min_examples_required=args.min_examples_required,
-            discover_entity_types=args.discover_entity_types,
-            language=args.language,
+    if args.command == "extract-mimic-discharge":
+        from ingest.mimic import MimicDischargeSubsetConfig, extract_mimic_discharge_subset
+
+        csv_path = Path(args.csv_path or os.environ.get("MIMIC_DISCHARGE_CSV", "data/mimic_iv_note/discharge.csv"))
+        manifest = extract_mimic_discharge_subset(
+            MimicDischargeSubsetConfig(
+                csv_path=csv_path,
+                output_dir=input_dir,
+                limit=env_optional_int("MIMIC_DISCHARGE_LIMIT", parse_optional_int(args.limit, default=25)),
+                note_type=os.environ.get("MIMIC_DISCHARGE_NOTE_TYPE", args.note_type),
+                max_chars=env_optional_int("MIMIC_DISCHARGE_MAX_CHARS", parse_optional_int(args.max_chars, default=6000)),
+                overwrite=True,
+            )
         )
-    elif args.command == "prompt-tune-clinical":
-        tune_prompts(
-            domain=CLINICAL_ARGUMENTATION_DOMAIN,
-            output=args.output,
-            selection_method=args.selection_method,
-            limit=args.limit,
-            max_tokens=args.max_tokens,
-            min_examples_required=args.min_examples_required,
-            discover_entity_types=args.discover_entity_types,
-            language=args.language,
-        )
+        print(f"Extracted {len(manifest)} MIMIC discharge notes into {input_dir}")
+        return
+
+    ensure_index(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        use_umls=env_bool("UMLS_ENABLED", True),
+        schema_guided=(args.command == "build-schema"),
+    )
 
 
 if __name__ == "__main__":

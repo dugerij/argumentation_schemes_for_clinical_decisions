@@ -1,20 +1,19 @@
+import asyncio
 import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from graphrag.config.load_config import load_config
 from pydantic import BaseModel, Field
 
 from argumentation.agents import ArgumentInteraction
 from helpers.jsonl import JsonlLogger, new_run_id
 from helpers.records import write_eval_record
-from rag.index import index_needs_rebuild, load_graph_tables
-from rag.retrieve import drift_search_context
+from rag.index import ensure_index
+from rag.retrieve import query_index_context
 
 
-CONFIG_PATH = Path("settings.yaml")
 EVENT_LOG = Path("logs/framework/events.jsonl")
 EVAL_LOG = Path("logs/framework/eval_records.jsonl")
 
@@ -67,23 +66,18 @@ async def generate_recommendation(request: RecommendationRequest) -> Recommendat
     rag_available = False
 
     output_dir = Path(os.environ.get("OUTPUT_BASE_DIR", "output"))
-    needs_rebuild, rebuild_reasons = index_needs_rebuild(output_dir)
+    input_dir = Path(os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
 
-    if request.use_rag and needs_rebuild:
-        warnings.append("GraphRAG index is unavailable or incompatible; recommendation will run without retrieved context.")
-        event_logger.event("rag_context", "skipped", reasons=rebuild_reasons)
-    elif request.use_rag:
-        with event_logger.timed("rag_context", output_dir=output_dir):
-            config = load_config(CONFIG_PATH)
-            entities, communities, community_reports = load_graph_tables(output_dir)
-            response, context = await drift_search_context(
-                config=config,
-                query=question,
-                entities=entities,
-                communities=communities,
-                community_reports=community_reports,
-                response_type="Multiple Paragraphs",
+    if request.use_rag:
+        with event_logger.timed("ensure_index", output_dir=output_dir, input_dir=input_dir):
+            index = await asyncio.to_thread(
+                ensure_index,
+                input_dir=input_dir,
+                output_dir=output_dir,
             )
+
+        with event_logger.timed("rag_context", output_dir=output_dir):
+            response, context = await query_index_context(index=index, query=question)
             rag_context = str(context or response)
             rag_available = True
 

@@ -16,7 +16,7 @@ The resulting analysis will be used to inform clinicians, health‑system leader
 - Evidence‑based therapeutic strategies, including blood‑pressure control, renin‑angiotensin‑aldosterone system blockade, glycemic management, and emerging precision‑medicine approaches.  
 - Population‑level impacts, such as prevalence trends in high‑risk groups (e.g., African ancestry, older adults) and potential public‑health interventions.  
 
-The analyst’s synthesis will therefore provide a structured, evidence‑based knowledge map that supports decision‑making for patient‑centered care, guideline development, resource allocation, and future research priorities within the CKD community.. The content of this report includes an overview of the community's key entities and relationships.
+The analyst’s synthesis will therefore provide a structured, evidence‑based knowledge map that supports decision‑making for patient‑centered care, resource allocation, and future research priorities within the CKD community.. The content of this report includes an overview of the community's key entities and relationships.
 
 # Report Structure
 The report should include the following sections:

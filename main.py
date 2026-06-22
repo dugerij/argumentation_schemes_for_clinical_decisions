@@ -4,13 +4,9 @@ import random
 from pathlib import Path
 
 from dotenv import load_dotenv
-from graphrag.config.load_config import load_config
 
 from eval.medqa_smoke import run_medqa_smoke_eval
 from helpers.config import startup_check
-
-
-CONFIG_PATH = Path("settings.yaml")
 
 
 def main() -> None:
@@ -19,11 +15,16 @@ def main() -> None:
 
     random.seed(int(os.environ.get("RANDOM_SEED", "42")))
     sample_size = int(os.environ.get("EVAL_SAMPLE_SIZE", "1"))
-    index_method = os.environ.get("GRAPHRAG_INDEX_METHOD", "standard")
+    input_dir = Path(os.environ["INPUT_BASE_DIR"])
     output_dir = Path(os.environ["OUTPUT_BASE_DIR"])
-    config = load_config(CONFIG_PATH)
 
-    asyncio.run(run_medqa_smoke_eval(config, output_dir, sample_size, index_method))
+    asyncio.run(
+        run_medqa_smoke_eval(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            sample_size=sample_size,
+        )
+    )
 
 
 if __name__ == "__main__":

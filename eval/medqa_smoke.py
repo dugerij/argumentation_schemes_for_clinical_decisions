@@ -1,12 +1,13 @@
 import json
 import random
 import re
+import asyncio
 from pathlib import Path
 
 from helpers.jsonl import JsonlLogger
 from helpers.records import write_eval_record
-from rag.index import ensure_index, load_graph_tables
-from rag.retrieve import drift_search_context
+from rag.index import ensure_index
+from rag.retrieve import query_index_context
 
 
 DEFAULT_DATA_PATH = Path("data/medqa/data_clean/questions/US/4_options/phrases_no_exclude_train.jsonl")
@@ -41,10 +42,9 @@ def extract_answer(response: str, options: dict[str, str]) -> str | None:
 
 
 async def run_medqa_smoke_eval(
-    config,
+    input_dir: Path,
     output_dir: Path,
     sample_size: int,
-    index_method: str,
     data_path: Path = DEFAULT_DATA_PATH,
     event_log_path: Path = DEFAULT_EVENT_LOG,
     eval_log_path: Path = DEFAULT_EVAL_LOG,
@@ -56,40 +56,37 @@ async def run_medqa_smoke_eval(
         data_path=data_path,
         output_dir=output_dir,
         sample_size=sample_size,
-        index_method=index_method,
         eval_log_path=eval_log_path,
     )
 
-    with event_logger.timed("ensure_graphrag_index", output_dir=output_dir, index_method=index_method):
-        await ensure_index(config, output_dir, index_method)
-
-    with event_logger.timed("load_graph_tables", output_dir=output_dir):
-        entities, communities, community_reports = load_graph_tables(output_dir)
-    print("Graph loaded.")
+    with event_logger.timed(
+        "ensure_index",
+        input_dir=input_dir,
+        output_dir=output_dir,
+    ):
+        llama_index = await asyncio.to_thread(
+            ensure_index,
+            input_dir,
+            output_dir,
+        )
+    print("Index loaded.")
 
     with event_logger.timed("load_medqa_questions", data_path=data_path, sample_size=sample_size):
         questions = load_questions(data_path, sample_size)
     correct = 0
 
-    for index, data in enumerate(questions, start=1):
+    for question_index, data in enumerate(questions, start=1):
         options = data["options"]
         expected_answer = data["answer"]
         question = f"{data['question']}\n{format_options(options)}"
         query = f"{question}\n\nAnswer with ONLY the correct option exactly as written."
 
-        question_id = str(data.get("id") or data.get("meta_info") or f"medqa_{index}")
-        event_logger.event("question", "started", question_id=question_id, question_index=index)
+        question_id = str(data.get("id") or data.get("meta_info") or f"medqa_{question_index}")
+        event_logger.event("question", "started", question_id=question_id, question_index=question_index)
 
         try:
-            with event_logger.timed("drift_search", question_id=question_id, question_index=index):
-                response, context = await drift_search_context(
-                    config=config,
-                    query=query,
-                    entities=entities,
-                    communities=communities,
-                    community_reports=community_reports,
-                    response_type="Single Sentence",
-                )
+            with event_logger.timed("query_index", question_id=question_id, question_index=question_index):
+                response, context = await query_index_context(index=llama_index, query=query)
         except Exception as exc:
             write_eval_record(
                 eval_log_path,
@@ -107,7 +104,7 @@ async def run_medqa_smoke_eval(
                 "question",
                 "failed",
                 question_id=question_id,
-                question_index=index,
+                question_index=question_index,
                 error_type=type(exc).__name__,
                 error=str(exc),
             )
@@ -136,13 +133,13 @@ async def run_medqa_smoke_eval(
             "question",
             "completed",
             question_id=question_id,
-            question_index=index,
+            question_index=question_index,
             predicted_answer=predicted,
             expected_answer=expected_answer,
             correct=is_correct,
         )
 
-        print(f"\n--- Q{index} ---")
+        print(f"\n--- Q{question_index} ---")
         print("Question:", question)
         print("Expected:", expected_answer)
         print("Predicted:", predicted)

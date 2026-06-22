@@ -5,7 +5,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class SourceDocument:
-    """Normalized document record passed into GraphRAG indexing."""
+    """Normalized document record passed into indexing."""
 
     id: str
     text: str

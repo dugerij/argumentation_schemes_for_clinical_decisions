@@ -2,26 +2,24 @@
 
 This repository builds an auditable clinical reasoning pipeline that combines evidence-grounded retrieval, structured medical argumentation, and formal Abstract Argumentation Framework adjudication.
 
-The long-term target corpus is:
+The target corpus is:
 
-- medical textbooks
-- NICE/WHO guidelines
 - MIMIC-IV notes after approval
 - UMLS/MEDCIN-normalized clinical concepts
 
-The current MedQA/textbook files are smoke-test inputs only. They are useful for checking that the pipeline runs, but they are not the final evaluation corpus.
+The current MedQA files are smoke-test inputs only. They are useful for checking that the pipeline runs, but they are not the final evaluation corpus.
 
 ## Pipeline
 
-1. **Evidence Graph Construction**
-   GraphRAG extracts clinically relevant entities and relationships from verified evidence sources. The goal is to ground reasoning in inspectable evidence rather than statistical associations.
-
-2. **Clinical Concept Normalization**
-   UMLS/MEDCIN maps mentions to clinical concepts. The default vocabulary priority covers diagnoses, medications, procedures, therapies, labs, and broad clinical findings:
+1. **UMLS Clinical Normalization**
+   UMLS/MEDCIN is the first step for all medical indexing. It identifies clinical entities, filters text toward medically relevant mentions, and seeds relationship hints before graph construction. The default vocabulary priority covers diagnoses, medications, procedures, therapies, labs, and broad clinical findings:
 
    ```text
    ICD10CM, SNOMEDCT_US, RXNORM, ATC, CPT, HCPCS, LNC, MEDCIN, MSH
    ```
+
+2. **Evidence Graph Construction**
+   LlamaIndex builds a property graph from UMLS-annotated evidence sources and retrieves supporting passages for downstream reasoning. The goal is to ground reasoning in inspectable evidence rather than statistical associations.
 
 3. **Structured Argument Generation**
    Multi-agent LLM components generate candidate clinical recommendations and instantiate argumentation schemes such as goal-oriented practical reasoning, contraindication checks, adverse-effect checks, and history/failure checks.
@@ -34,14 +32,14 @@ The current MedQA/textbook files are smoke-test inputs only. They are useful for
 
 ## Repository Layout
 
-- `ingest/`: normalized loading for textbooks, guidelines, and future MIMIC-IV notes.
+- `ingest/`: normalized loading for MIMIC-IV notes.
 - `entity_extraction/`: UMLS/MEDCIN schemas, vocabulary priorities, lookup client, and extraction helpers.
-- `rag/`: GraphRAG indexing and retrieval helpers.
+- `rag/`: LlamaIndex indexing and retrieval helpers.
 - `argumentation/`: agents, schemes, critical questions, and AAF semantics.
 - `eval/`: MedQA smoke test, MIMIC-IV-Ext-ITR placeholder, metrics, rubrics, and record-pulling tools.
 - `helpers/`: shared environment validation, JSONL logging, and record utilities.
 - `api/`: local read-only API for events, evaluation records, and recommendation traces.
-- `prompts/`: GraphRAG prompts customized for clinical evidence extraction.
+- `prompts/`: prompt templates kept for reference and future extractor experiments.
 
 ## Setup
 
@@ -62,9 +60,30 @@ The cleaned env file is organized into:
 - LLM providers
 - model names
 - provider credentials
-- GraphRAG storage/indexing
+- LlamaIndex storage/indexing
 - smoke/evaluation controls
 - UMLS configuration
+
+By default, indexing points to an extracted MIMIC discharge-note subset:
+
+```text
+INPUT_BASE_DIR=data/evidence/mimic_discharge_subset
+OUTPUT_BASE_DIR=output
+```
+
+Place extracted MIMIC note `.txt` files in that input folder. The folder is ignored by git because it may contain licensed clinical material.
+
+Create the note subset explicitly before building the index:
+
+```bash
+python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000
+```
+
+For medical indexing, keep `UMLS_ENABLED=true`. That makes the build path run the UMLS prepass before graph construction, even when schema-guided extraction is off.
+
+If you want the index build to use a different model from the argumentation agents, set `INDEX_LLM_PROVIDER`, `INDEX_LLM_MODEL`, `INDEX_EMBEDDING_PROVIDER`, and `INDEX_EMBEDDING_MODEL`.
+
+For local Ollama builds, the notebook and code now default to `embeddinggemma:300m` for embeddings when no explicit embedding model is set.
 
 For local Ollama, provider keys can remain blank. For UMLS lookup:
 
@@ -81,16 +100,34 @@ Run the current smoke test:
 python main.py
 ```
 
-Build a GraphRAG index explicitly:
+Build the LlamaIndex property graph explicitly:
 
 ```bash
 python make_index.py build
 ```
 
-Generate clinically tuned GraphRAG prompts:
+Build the schema-guided graph with UMLS-based entity normalization and relation hints:
 
 ```bash
-python make_index.py prompt-tune-clinical
+python make_index.py build-schema
+```
+
+Set `INDEX_SCHEMA_GUIDED=true` to make the smoke test and API/index helpers use the same mode by default.
+For Ollama-backed builds, `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, and `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK` control how aggressively the schema extractor calls the model. If you see `ReadTimeout` on large chapters, raise the timeout first and keep workers low.
+
+If you want the safer baseline for notebook work or large note subsets, keep schema-guided extraction off and rely on the UMLS-first graph build:
+
+```text
+UMLS_ENABLED=true
+INDEX_SCHEMA_GUIDED=false
+```
+
+That still focuses the graph on medical entities and relationships, but avoids the slowest extractor path.
+
+Extract a small MIMIC discharge subset into the input folder:
+
+```bash
+python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000
 ```
 
 Look up UMLS concepts:
@@ -107,7 +144,7 @@ python -m entity_extraction.smoke_test
 
 ## Logs and Records
 
-GraphRAG writes its own logs under `logs/`. The framework writes structured JSONL logs under:
+LlamaIndex writes its own internal index files under the configured output directory. The framework writes structured JSONL logs under:
 
 - `logs/framework/events.jsonl`: step-level events, durations, failures, and previews.
 - `logs/framework/eval_records.jsonl`: one pullable record per evaluated question.
@@ -173,4 +210,4 @@ The API writes recommendation traces into the same JSONL record structure used b
 
 - Do not treat MedQA exact match as the final evaluation metric. It is only a smoke-test signal.
 - Do not index all MIMIC-IV notes blindly. Filter and normalize first, then build evidence and patient-specific retrieval layers deliberately.
-- Keep UMLS/MEDCIN as a preprocessing and normalization layer. GraphRAG should consume enriched text/metadata rather than replacing clinical concept extraction.
+- Keep UMLS/MEDCIN as a preprocessing and normalization layer. LlamaIndex should consume enriched text/metadata rather than replacing clinical concept extraction.

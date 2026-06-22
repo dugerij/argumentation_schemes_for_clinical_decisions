@@ -1,6 +1,7 @@
 import re
 from collections.abc import Iterable
 
+from entity_extraction.candidates import extract_candidate_terms
 from entity_extraction.schema import ClinicalEntityMention
 from entity_extraction.umls import UMLSClient
 
@@ -8,7 +9,7 @@ from entity_extraction.umls import UMLSClient
 class UMLSConceptExtractor:
     """Maps candidate clinical terms to UMLS concepts and text spans.
 
-    This is intentionally term-based. MIMIC/NICE ingestion can later plug in a
+    This is intentionally term-based. MIMIC ingestion can later plug in a
     stronger mention detector while reusing the same UMLS normalization layer.
     """
 
@@ -42,3 +43,7 @@ class UMLSConceptExtractor:
                 )
 
         return mentions
+
+    def extract_from_text(self, text: str, limit: int = 120) -> list[ClinicalEntityMention]:
+        candidate_terms = extract_candidate_terms(text, limit=limit)
+        return self.extract_from_terms(text, candidate_terms)
