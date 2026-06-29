@@ -2,6 +2,11 @@
 
 This repository builds an auditable clinical reasoning pipeline that combines evidence-grounded retrieval, structured medical argumentation, and formal Abstract Argumentation Framework adjudication.
 
+Supporting documentation:
+
+- [Local Data Sources](docs/data_sources.md)
+- [Argumentation Framework Comparison](docs/framework_comparison.md)
+
 The target corpus is:
 
 - MIMIC-IV notes after approval
@@ -100,6 +105,12 @@ Run the current smoke test:
 python main.py
 ```
 
+Run the explicit smoke-eval subcommand:
+
+```bash
+python main.py smoke-eval
+```
+
 Build the LlamaIndex property graph explicitly:
 
 ```bash
@@ -140,6 +151,33 @@ Run the offline vocabulary smoke test:
 
 ```bash
 python -m entity_extraction.smoke_test
+```
+
+Run the end-to-end pipeline check:
+
+```bash
+python main.py pipeline-check \
+  --scenario "A patient with chronic kidney disease and hypertension needs blood pressure management." \
+  --clinical-goal "reduce blood pressure while avoiding renal harm" \
+  --dry-run
+```
+
+Benchmark embedding models against the same note subset and question sample:
+
+```bash
+python main.py benchmark-embeddings \
+  --provider vllm \
+  --generation-model Qwen/Qwen2.5-7B-Instruct \
+  --embedding-model BAAI/bge-small-en-v1.5 \
+  --embedding-model BAAI/bge-base-en-v1.5 \
+  --embedding-model intfloat/e5-base-v2 \
+  --sample-size 5
+```
+
+Start the local API through the unified entrypoint:
+
+```bash
+python main.py serve-api --reload
 ```
 
 ## Logs and Records
@@ -205,6 +243,21 @@ curl -X POST http://127.0.0.1:8000/recommend \
 ```
 
 The API writes recommendation traces into the same JSONL record structure used by evaluation. Historical recommendation records can be inspected through `/recommendations`.
+
+## Notebook Guidance
+
+If you are working on an A100 40 GB MIG slice, prefer the new lightweight notebooks:
+
+- `vllm_embedding_benchmark.ipynb`: embedding comparison with one generation model, small note subset, and no graph rendering in the inner loop.
+- `pipeline_check.ipynb`: end-to-end index plus recommendation smoke test.
+
+The older `mimic_umls_pipeline.ipynb` is slower because it can combine:
+
+- all-note extraction,
+- optional online UMLS normalization,
+- repeated full graph rebuilds across model combinations,
+- artifact rendering inside the benchmark loop,
+- and in-process `vllm_offline` model loading.
 
 ## Notes
 

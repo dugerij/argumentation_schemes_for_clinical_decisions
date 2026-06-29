@@ -127,7 +127,11 @@ async def query_index_context(
     similarity_top_k: int = 5,
     llm: Any | None = None,
 ) -> tuple[str, str]:
-    query_engine = index.as_query_engine(similarity_top_k=similarity_top_k, llm=llm or build_llm())
+    index_llm = getattr(index, "_llm", None)
+    query_engine = index.as_query_engine(
+        similarity_top_k=similarity_top_k,
+        llm=llm or index_llm or build_llm(),
+    )
     response = query_engine.query(query)
     source_nodes = getattr(response, "source_nodes", None) or []
     graph_store = _graph_store(index)

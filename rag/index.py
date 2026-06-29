@@ -228,6 +228,11 @@ def build_llm():
             timeout=request_timeout,
         )
 
+    if provider == "vllm_offline":
+        from rag.vllm_offline import build_offline_llm
+
+        return build_offline_llm(model_name or os.environ.get("VLLM_MODEL"))
+
     if provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
@@ -266,8 +271,16 @@ def build_embed_model():
         return OpenAIEmbedding(
             model=model_name or os.environ.get("VLLM_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
             api_key=os.environ.get("VLLM_API_KEY", "EMPTY"),
-            api_base=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
+            api_base=os.environ.get(
+                "VLLM_EMBEDDING_BASE_URL",
+                os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
+            ),
         )
+
+    if provider == "vllm_offline":
+        from rag.vllm_offline import build_offline_embedding
+
+        return build_offline_embedding(model_name or os.environ.get("VLLM_EMBEDDING_MODEL"))
 
     if provider == "openai":
         api_key = os.environ.get("OPENAI_API_KEY")
@@ -619,6 +632,27 @@ def ensure_index(
         except Exception as exc:
             last_error = exc
             last_error_traceback = traceback.format_exc(limit=20)
+            error_text = str(exc).lower()
+            non_retryable = isinstance(exc, (TypeError, ValueError)) or any(
+                marker in error_text
+                for marker in (
+                    "no space left on device",
+                    "not enough free disk space",
+                    "max_model_len",
+                    "unexpected keyword argument",
+                )
+            )
+            if non_retryable:
+                event_logger.event(
+                    "index_build",
+                    "failed",
+                    attempt=attempt,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                    traceback=last_error_traceback,
+                    retryable=False,
+                )
+                raise
             wait = 2**attempt
             event_logger.event(
                 "index_build",

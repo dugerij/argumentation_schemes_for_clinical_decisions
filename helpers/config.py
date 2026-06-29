@@ -2,7 +2,7 @@ import os
 import json
 
 
-VALID_PROVIDERS = {'ollama', 'openai', 'gemini', 'together_ai', 'vllm'}
+VALID_PROVIDERS = {'ollama', 'openai', 'gemini', 'together_ai', 'vllm', 'vllm_offline'}
 TRUTHY = {'1', 'true', 'yes', 'on'}
 
 
@@ -85,7 +85,7 @@ def startup_check():
     ]
     for provider in providers:
         if provider not in VALID_PROVIDERS:
-            raise ValueError("Invalid provider specified. Please choose from 'ollama', 'together_ai', 'openai', 'gemini', or 'vllm'.")
+            raise ValueError("Invalid provider specified. Please choose from 'ollama', 'together_ai', 'openai', 'gemini', 'vllm', or 'vllm_offline'.")
 
     # Validate provider-specific credentials
     provider_vars = [
