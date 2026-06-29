@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from api.recommendation import RecommendationRequest, generate_recommendation
 from eval.embedding_benchmark import EmbeddingBenchmarkConfig, run_embedding_benchmark
 from eval.medqa_smoke import run_medqa_smoke_eval
+from eval.model_benchmark import ModelBenchmarkConfig, run_model_benchmark
 from eval.pipeline_check import run_pipeline_check
 from helpers.config import parse_optional_int, startup_check
 
@@ -44,6 +45,19 @@ def parse_args() -> argparse.Namespace:
     benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
     benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
     benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
+
+    model_benchmark = subparsers.add_parser("benchmark-models", help="Benchmark generation models with a fixed embedding model.")
+    model_benchmark.add_argument("--provider", default="vllm")
+    model_benchmark.add_argument("--generation-model", action="append", dest="generation_models", required=True)
+    model_benchmark.add_argument("--embedding-model", required=True)
+    model_benchmark.add_argument("--output-root", default="output/model_benchmark")
+    model_benchmark.add_argument("--sample-size", type=int, default=5)
+    model_benchmark.add_argument("--questions-path", default=None)
+    model_benchmark.add_argument("--use-umls", action="store_true")
+    model_benchmark.add_argument("--schema-guided", action="store_true")
+    model_benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
+    model_benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
+    model_benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
 
     pipeline = subparsers.add_parser("pipeline-check", help="Run an end-to-end pipeline smoke check.")
     pipeline.add_argument("--scenario", required=True)
@@ -107,6 +121,29 @@ def main() -> None:
                     output_root=Path(args.output_root),
                     generation_model=args.generation_model,
                     embedding_models=tuple(args.embedding_models),
+                    provider=args.provider,
+                    use_umls=args.use_umls,
+                    schema_guided=args.schema_guided,
+                    mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),
+                    questions_path=(Path(args.questions_path) if args.questions_path else None),
+                    sample_size=args.sample_size,
+                    note_limit=parse_optional_int(args.note_limit, default=25),
+                    note_max_chars=parse_optional_int(args.note_max_chars, default=3000),
+                )
+            )
+        )
+        for result in results:
+            print(result)
+        return
+
+    if command == "benchmark-models":
+        results = asyncio.run(
+            run_model_benchmark(
+                ModelBenchmarkConfig(
+                    input_dir=input_dir,
+                    output_root=Path(args.output_root),
+                    generation_models=tuple(args.generation_models),
+                    embedding_model=args.embedding_model,
                     provider=args.provider,
                     use_umls=args.use_umls,
                     schema_guided=args.schema_guided,

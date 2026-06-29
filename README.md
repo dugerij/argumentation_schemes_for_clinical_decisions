@@ -174,6 +174,18 @@ python main.py benchmark-embeddings \
   --sample-size 5
 ```
 
+Benchmark generation models while holding the embedding fixed:
+
+```bash
+python main.py benchmark-models \
+  --provider vllm \
+  --generation-model Qwen/Qwen2.5-3B-Instruct \
+  --generation-model Qwen/Qwen2.5-7B-Instruct \
+  --generation-model microsoft/Phi-3.5-mini-instruct \
+  --embedding-model BAAI/bge-base-en-v1.5 \
+  --sample-size 5
+```
+
 Start the local API through the unified entrypoint:
 
 ```bash
@@ -249,6 +261,7 @@ The API writes recommendation traces into the same JSONL record structure used b
 If you are working on an A100 40 GB MIG slice, prefer the new lightweight notebooks:
 
 - `vllm_embedding_benchmark.ipynb`: embedding comparison with one generation model, small note subset, and no graph rendering in the inner loop.
+- `vllm_model_benchmark.ipynb`: generation-model comparison with one fixed embedding.
 - `pipeline_check.ipynb`: end-to-end index plus recommendation smoke test.
 
 The older `mimic_umls_pipeline.ipynb` is slower because it can combine:

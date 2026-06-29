@@ -77,6 +77,7 @@ target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+.jupyter/
 
 # IPython
 profile_default/
@@ -190,6 +191,7 @@ cython_debug/
 
 # Ruff stuff:
 .ruff_cache/
+.benchmarks/
 
 # PyPI configuration file
 .pypirc
@@ -205,6 +207,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+.marimo/
 .DS_Store
 .DS_Store
 
@@ -227,8 +230,10 @@ exports/
 
 # GraphRAG/generated artifacts
 cache/
+.cache/
 logs/
 output/
+.matplotlib/
 *.parquet
 *.graphml
 *.lance
@@ -242,10 +247,20 @@ logs/framework/
 # Local API/runtime files
 .uvicorn/
 *.pid
+*.sqlite
+*.sqlite3
+*.db
 
 # Local model/vector artifacts
 models/
 checkpoints/
+.huggingface/
+.hf/
+huggingface/
+hf_home/
+wandb/
+mlruns/
+runs/
 *.gguf
 *.safetensors
 *.bin
