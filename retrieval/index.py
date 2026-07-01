@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from entity_extraction.candidates import extract_candidate_terms
-from entity_extraction.extractor import UMLSConceptExtractor
-from entity_extraction.medical_schema import (
+from helpers.config import env_bool, env_int
+from helpers.jsonl import JsonlLogger, new_run_id
+from helpers.ollama import assert_ollama_available, ollama_endpoint
+from helpers.paths import INDEX_BUILD_LOG_PATH
+from retrieval.concepts.candidates import extract_candidate_terms
+from retrieval.concepts.extractor import UMLSConceptExtractor
+from retrieval.concepts.medical_schema import (
     ClinicalSchemaGuidance,
     MedicalEntityType,
     MedicalRelationType,
@@ -20,10 +24,7 @@ from entity_extraction.medical_schema import (
     format_concept_hint_block,
     entity_type_for_category,
 )
-from entity_extraction.umls import UMLSClient, UMLSConfig
-from helpers.config import env_bool, env_int
-from helpers.ollama import assert_ollama_available, ollama_endpoint
-from helpers.jsonl import JsonlLogger, new_run_id
+from retrieval.concepts.umls import UMLSClient, UMLSConfig
 
 
 INDEX_MANIFEST = "index_manifest.json"
@@ -32,8 +33,10 @@ SOURCE_FILE_PATTERN = "*.txt"
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_SCHEMA_HIT_LIMIT = 120
-INDEX_EVENT_LOG = Path("logs/framework/index_build.jsonl")
+INDEX_EVENT_LOG = INDEX_BUILD_LOG_PATH
 DEFAULT_LLM_REQUEST_TIMEOUT = 180.0
+
+
 def source_documents(input_dir: Path) -> list[Path]:
     if not input_dir.exists():
         return []

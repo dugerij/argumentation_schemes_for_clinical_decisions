@@ -1,6 +1,6 @@
 import asyncio
 
-from rag.retrieve import query_index_context
+from retrieval.query import query_index_context
 
 
 class _Response:

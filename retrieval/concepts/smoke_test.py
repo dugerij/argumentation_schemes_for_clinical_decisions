@@ -1,4 +1,4 @@
-from entity_extraction.vocabularies import category_for
+from retrieval.concepts.vocabularies import category_for
 
 
 def main() -> None:

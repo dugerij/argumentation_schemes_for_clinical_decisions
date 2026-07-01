@@ -14,12 +14,13 @@ from dotenv import load_dotenv
 from eval.medqa_smoke import extract_answer, format_options, load_questions
 from helpers.config import env_bool, parse_optional_int, startup_check
 from helpers.jsonl import JsonlLogger
+from helpers.paths import EMBEDDING_BENCHMARK_LOG_PATH
 from ingest.mimic import MimicDischargeSubsetConfig, extract_mimic_discharge_subset
-from rag.index import ensure_index
-from rag.retrieve import query_index_context
+from retrieval.index import ensure_index
+from retrieval.query import query_index_context
 
 
-DEFAULT_EVENT_LOG = Path("logs/framework/embedding_benchmark.jsonl")
+DEFAULT_EVENT_LOG = EMBEDDING_BENCHMARK_LOG_PATH
 DEFAULT_DATA_CANDIDATES = (
     Path("test.jsonl"),
     Path("data/medqa/data_clean/questions/US/test.jsonl"),

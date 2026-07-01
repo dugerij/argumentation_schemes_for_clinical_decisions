@@ -38,8 +38,7 @@ The current MedQA files are smoke-test inputs only. They are useful for checking
 ## Repository Layout
 
 - `ingest/`: normalized loading for MIMIC-IV notes.
-- `entity_extraction/`: UMLS/MEDCIN schemas, vocabulary priorities, lookup client, and extraction helpers.
-- `rag/`: LlamaIndex indexing and retrieval helpers.
+- `retrieval/`: concept normalization, LlamaIndex indexing, query helpers, and graph visualization.
 - `argumentation/`: agents, schemes, critical questions, and AAF semantics.
 - `eval/`: MedQA smoke test, MIMIC-IV-Ext-ITR placeholder, metrics, rubrics, and record-pulling tools.
 - `helpers/`: shared environment validation, JSONL logging, and record utilities.
@@ -147,13 +146,13 @@ python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/disch
 Look up UMLS concepts:
 
 ```bash
-python -m entity_extraction.lookup "heart failure" metformin "renal replacement therapy"
+python -m retrieval.concepts.lookup "heart failure" metformin "renal replacement therapy"
 ```
 
 Run the offline vocabulary smoke test:
 
 ```bash
-python -m entity_extraction.smoke_test
+python -m retrieval.concepts.smoke_test
 ```
 
 Run the end-to-end pipeline check:
@@ -197,8 +196,8 @@ python main.py serve-api --reload
 
 LlamaIndex writes its own internal index files under the configured output directory. The framework writes structured JSONL logs under:
 
-- `logs/framework/events.jsonl`: step-level events, durations, failures, and previews.
-- `logs/framework/eval_records.jsonl`: one pullable record per evaluated question.
+- `output/logs/framework/events.jsonl`: step-level events, durations, failures, and previews.
+- `output/logs/framework/eval_records.jsonl`: one pullable record per evaluated question.
 
 Pull records from the command line:
 

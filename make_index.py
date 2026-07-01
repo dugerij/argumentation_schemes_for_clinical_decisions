@@ -5,7 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from helpers.config import env_bool, env_optional_int, parse_optional_int, startup_check
-from rag.index import ensure_index
+from retrieval.index import ensure_index
 
 
 def parse_args() -> argparse.Namespace:

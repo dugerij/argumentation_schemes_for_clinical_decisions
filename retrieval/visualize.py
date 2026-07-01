@@ -289,7 +289,7 @@ def save_clinical_entity_graph(
     height: str = "760px",
     width: str = "100%",
 ) -> Path:
-    """Render a readable graph from GraphRAG-style entity and relationship parquet files."""
+    """Render a readable graph from entity and relationship parquet files."""
 
     output_dir = Path(output_dir)
     html_path = Path(html_path) if html_path is not None else output_dir / "hh_property_graph.html"

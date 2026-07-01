@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 
 from api.recommendation import RecommendationRequest, generate_recommendation
 from helpers.config import startup_check
-from rag.index import ensure_index
-from rag.retrieve import query_index_context
+from retrieval.index import ensure_index
+from retrieval.query import query_index_context
 
 
 @dataclass(frozen=True)

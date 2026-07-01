@@ -9,6 +9,7 @@ from typing import List, Optional
 from helpers.jsonl import JsonlLogger
 from helpers.config import get_model_name
 from helpers.ollama import ollama_chat
+from helpers.paths import EVENT_LOG_PATH
 
 # Load environment variables from .env file
 load_dotenv()
@@ -137,7 +138,7 @@ class ArgumentInteraction:
         self.rag_context = rag_context
         self.max_rounds = max_rounds
         self.dialogue_history: List[DialogueTurn] = []
-        self.event_logger = event_logger or JsonlLogger(Path("logs/framework/events.jsonl"), run_id="argument_interaction")
+        self.event_logger = event_logger or JsonlLogger(EVENT_LOG_PATH, run_id="argument_interaction")
         
         self.generator = GeneratorAgent(get_model_name("GENERATOR"))
         self.verifier = VerifierAgent(get_model_name("VERIFIER"))

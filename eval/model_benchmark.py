@@ -20,11 +20,12 @@ from eval.embedding_benchmark import (
 from eval.medqa_smoke import extract_answer, format_options
 from helpers.config import env_bool, parse_optional_int, startup_check
 from helpers.jsonl import JsonlLogger
-from rag.index import ensure_index
-from rag.retrieve import query_index_context
+from helpers.paths import MODEL_BENCHMARK_LOG_PATH
+from retrieval.index import ensure_index
+from retrieval.query import query_index_context
 
 
-DEFAULT_EVENT_LOG = Path("logs/framework/model_benchmark.jsonl")
+DEFAULT_EVENT_LOG = MODEL_BENCHMARK_LOG_PATH
 
 
 @dataclass(frozen=True)

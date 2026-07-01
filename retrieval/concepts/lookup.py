@@ -3,7 +3,7 @@ import json
 
 from dotenv import load_dotenv
 
-from entity_extraction.umls import UMLSClient, UMLSConfig
+from retrieval.concepts.umls import UMLSClient, UMLSConfig
 from helpers.jsonl import to_jsonable
 
 

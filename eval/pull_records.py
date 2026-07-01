@@ -7,7 +7,7 @@ from helpers.records import load_eval_records
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Pull JSONL evaluation records.")
-    parser.add_argument("--path", default="logs/framework/eval_records.jsonl", help="Evaluation JSONL path.")
+    parser.add_argument("--path", default="output/logs/framework/eval_records.jsonl", help="Evaluation JSONL path.")
     parser.add_argument("--run-id", default=None, help="Optional run id filter.")
     parser.add_argument("--limit", type=int, default=None, help="Maximum records to print.")
     return parser.parse_args()

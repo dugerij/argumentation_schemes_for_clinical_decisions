@@ -5,14 +5,15 @@ import asyncio
 from pathlib import Path
 
 from helpers.jsonl import JsonlLogger
+from helpers.paths import EVAL_RECORD_LOG_PATH, EVENT_LOG_PATH
 from helpers.records import write_eval_record
-from rag.index import ensure_index
-from rag.retrieve import query_index_context
+from retrieval.index import ensure_index
+from retrieval.query import query_index_context
 
 
 DEFAULT_DATA_PATH = Path("data/medqa/data_clean/questions/US/4_options/phrases_no_exclude_train.jsonl")
-DEFAULT_EVENT_LOG = Path("logs/framework/events.jsonl")
-DEFAULT_EVAL_LOG = Path("logs/framework/eval_records.jsonl")
+DEFAULT_EVENT_LOG = EVENT_LOG_PATH
+DEFAULT_EVAL_LOG = EVAL_RECORD_LOG_PATH
 
 
 def format_options(options: dict[str, str]) -> str:

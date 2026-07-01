@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from entity_extraction.schema import ClinicalEntityMention
+from retrieval.concepts.schema import ClinicalEntityMention
 
 
 MedicalEntityType = Literal[

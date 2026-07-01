@@ -1,9 +1,9 @@
 import re
 from collections.abc import Iterable
 
-from entity_extraction.candidates import extract_candidate_terms
-from entity_extraction.schema import ClinicalEntityMention
-from entity_extraction.umls import UMLSClient
+from retrieval.concepts.candidates import extract_candidate_terms
+from retrieval.concepts.schema import ClinicalEntityMention
+from retrieval.concepts.umls import UMLSClient
 
 
 class UMLSConceptExtractor:

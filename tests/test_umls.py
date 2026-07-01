@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 from requests import HTTPError, Response
 
-from entity_extraction.umls import UMLSClient, UMLSConfig, parse_source_vocabularies
+from retrieval.concepts.umls import UMLSClient, UMLSConfig, parse_source_vocabularies
 
 
 def make_response(status_code: int, payload: dict | None = None) -> Response:
@@ -37,7 +37,7 @@ class UMLSClientTests(unittest.TestCase):
             )
         )
 
-        with patch("entity_extraction.umls.requests.get", return_value=make_response(502)) as get:
+        with patch("retrieval.concepts.umls.requests.get", return_value=make_response(502)) as get:
             self.assertEqual(client.search("DS-11 subject id"), [])
 
         self.assertEqual(get.call_count, 2)
@@ -46,7 +46,7 @@ class UMLSClientTests(unittest.TestCase):
     def test_non_retryable_http_error_is_raised(self):
         client = UMLSClient(UMLSConfig(api_key="test-key", max_retries=1, retry_backoff_seconds=0))
 
-        with patch("entity_extraction.umls.requests.get", return_value=make_response(401)):
+        with patch("retrieval.concepts.umls.requests.get", return_value=make_response(401)):
             with self.assertRaises(HTTPError):
                 client.search("hypertension")
 
@@ -73,7 +73,7 @@ class UMLSClientTests(unittest.TestCase):
         }
 
         with patch(
-            "entity_extraction.umls.requests.get",
+            "retrieval.concepts.umls.requests.get",
             Mock(side_effect=[make_response(502), make_response(200, payload)]),
         ):
             matches = client.search("hypertension")

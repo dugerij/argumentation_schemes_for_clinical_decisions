@@ -9,13 +9,14 @@ from pydantic import BaseModel, Field
 
 from argumentation.agents import ArgumentInteraction
 from helpers.jsonl import JsonlLogger, new_run_id
+from helpers.paths import EVAL_RECORD_LOG_PATH, EVENT_LOG_PATH
 from helpers.records import write_eval_record
-from rag.index import ensure_index
-from rag.retrieve import query_index_context
+from retrieval.index import ensure_index
+from retrieval.query import query_index_context
 
 
-EVENT_LOG = Path("logs/framework/events.jsonl")
-EVAL_LOG = Path("logs/framework/eval_records.jsonl")
+EVENT_LOG = EVENT_LOG_PATH
+EVAL_LOG = EVAL_RECORD_LOG_PATH
 
 
 class RecommendationRequest(BaseModel):

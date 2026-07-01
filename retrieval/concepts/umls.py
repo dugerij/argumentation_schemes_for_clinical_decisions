@@ -6,8 +6,8 @@ from typing import Any
 
 import requests
 
-from entity_extraction.schema import UMLSConcept
-from entity_extraction.vocabularies import SOURCE_PRIORITY, category_for
+from retrieval.concepts.schema import UMLSConcept
+from retrieval.concepts.vocabularies import SOURCE_PRIORITY, category_for
 
 logger = logging.getLogger(__name__)
 

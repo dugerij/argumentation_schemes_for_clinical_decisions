@@ -1,7 +1,7 @@
 import re
 from typing import Any
 
-from rag.index import build_llm
+from retrieval.index import build_llm
 
 
 RELATION_STRING_RE = re.compile(

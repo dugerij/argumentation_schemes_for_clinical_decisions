@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Set, Tuple, Dict, Any
 
-from entity_extraction.schema import ClinicalKnowledgeContext, UMLSConcept
+from retrieval.concepts.schema import ClinicalKnowledgeContext, UMLSConcept
 
 
 # =====================================================================

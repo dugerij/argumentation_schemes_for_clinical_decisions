@@ -6,11 +6,12 @@ from fastapi import FastAPI, Query
 
 from api.recommendation import RecommendationRequest, RecommendationResponse, generate_recommendation
 from helpers.jsonl import load_jsonl
+from helpers.paths import EVAL_RECORD_LOG_PATH, EVENT_LOG_PATH
 from helpers.records import load_eval_records
 
 
-DEFAULT_EVENT_LOG = Path("logs/framework/events.jsonl")
-DEFAULT_EVAL_LOG = Path("logs/framework/eval_records.jsonl")
+DEFAULT_EVENT_LOG = EVENT_LOG_PATH
+DEFAULT_EVAL_LOG = EVAL_RECORD_LOG_PATH
 
 app = FastAPI(
     title="Clinical Argumentation API",
