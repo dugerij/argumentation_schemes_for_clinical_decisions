@@ -2,13 +2,13 @@ import os
 import json
 import logging
 from pathlib import Path
-import litellm
 from dotenv import load_dotenv
 from dataclasses import dataclass, asdict
 from typing import List, Optional
 
 from helpers.jsonl import JsonlLogger
 from helpers.config import get_model_name
+from helpers.ollama import ollama_chat
 
 # Load environment variables from .env file
 load_dotenv()
@@ -59,8 +59,7 @@ class GeneratorAgent:
         messages.append({"role": "user", "content": prompt})
         
         logger.info("Generator is formulating an argument...")
-        response = litellm.completion(model=self.model, messages=messages)
-        return response.choices[0].message.content
+        return ollama_chat(model=self.model, messages=messages)
 
 class VerifierAgent:
     def __init__(self, model: str):
@@ -79,18 +78,14 @@ class VerifierAgent:
         ]
         
         logger.info("Verifier is evaluating the argument...")
-        response = litellm.completion(
-            model=self.model, 
+        content = ollama_chat(
+            model=self.model,
             messages=messages,
-            response_format={"type": "json_object"}
+            format="json",
         )
-        
-        # Parse and clean JSON response
-        content = response.choices[0].message.content
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            # Fallback in case the model returns markdown-wrapped JSON
             clean_content = content.replace("```json", "").replace("```", "").strip()
             return json.loads(clean_content)
 
@@ -122,8 +117,7 @@ class ReasonerAgent:
         messages.append({"role": "user", "content": history_text})
         
         logger.info("Reasoner is assessing the final framework...")
-        response = litellm.completion(model=self.model, messages=messages)
-        return response.choices[0].message.content
+        return ollama_chat(model=self.model, messages=messages)
 
 # ==========================================
 # Orchestrator Class

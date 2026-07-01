@@ -62,9 +62,7 @@ cp .env.example .env
 
 The cleaned env file is organized into:
 
-- LLM providers
-- model names
-- provider credentials
+- Ollama model names and endpoint
 - LlamaIndex storage/indexing
 - smoke/evaluation controls
 - UMLS configuration
@@ -86,11 +84,16 @@ python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/disch
 
 For medical indexing, keep `UMLS_ENABLED=true`. That makes the build path run the UMLS prepass before graph construction, even when schema-guided extraction is off.
 
-If you want the index build to use a different model from the argumentation agents, set `INDEX_LLM_PROVIDER`, `INDEX_LLM_MODEL`, `INDEX_EMBEDDING_PROVIDER`, and `INDEX_EMBEDDING_MODEL`.
+If you want the index build to use a different model from the argumentation agents, set `INDEX_LLM_MODEL` and `INDEX_EMBEDDING_MODEL`.
 
-For local Ollama builds, the notebook and code now default to `embeddinggemma:300m` for embeddings when no explicit embedding model is set.
+The repo is now Ollama-only. The current experiment sweeps are:
 
-For local Ollama, provider keys can remain blank. For UMLS lookup:
+```text
+generation_model_sweep = ["gemma4", "qwen3.5:9b", "medgemma1.5"]
+embedding_model_sweep = ["qwen3-embedding:0.6b", "embeddinggemma:latest", "all-minilm:latest"]
+```
+
+For UMLS lookup:
 
 ```bash
 UMLS_ENABLED=true
@@ -166,11 +169,10 @@ Benchmark embedding models against the same note subset and question sample:
 
 ```bash
 python main.py benchmark-embeddings \
-  --provider vllm \
-  --generation-model Qwen/Qwen2.5-7B-Instruct \
-  --embedding-model BAAI/bge-small-en-v1.5 \
-  --embedding-model BAAI/bge-base-en-v1.5 \
-  --embedding-model intfloat/e5-base-v2 \
+  --generation-model gemma4 \
+  --embedding-model qwen3-embedding:0.6b \
+  --embedding-model embeddinggemma:latest \
+  --embedding-model all-minilm:latest \
   --sample-size 5
 ```
 
@@ -178,11 +180,10 @@ Benchmark generation models while holding the embedding fixed:
 
 ```bash
 python main.py benchmark-models \
-  --provider vllm \
-  --generation-model Qwen/Qwen2.5-3B-Instruct \
-  --generation-model Qwen/Qwen2.5-7B-Instruct \
-  --generation-model microsoft/Phi-3.5-mini-instruct \
-  --embedding-model BAAI/bge-base-en-v1.5 \
+  --generation-model gemma4 \
+  --generation-model qwen3.5:9b \
+  --generation-model medgemma1.5 \
+  --embedding-model qwen3-embedding:0.6b \
   --sample-size 5
 ```
 
@@ -258,19 +259,13 @@ The API writes recommendation traces into the same JSONL record structure used b
 
 ## Notebook Guidance
 
-If you are working on an A100 40 GB MIG slice, prefer the new lightweight notebooks:
+Use these notebooks for model selection and integration checks:
 
-- `vllm_embedding_benchmark.ipynb`: embedding comparison with one generation model, small note subset, and no graph rendering in the inner loop.
-- `vllm_model_benchmark.ipynb`: generation-model comparison with one fixed embedding.
+- `ollama_test.ipynb`: full generation x embedding sweep on the Ollama-backed property-graph workflow.
+- `ollama_embedding_benchmark.ipynb`: fixed generation model, compare embedding models.
+- `ollama_model_benchmark.ipynb`: fixed embedding model, compare generation models.
+- `ollama_connection_model_access_test.ipynb`: reachability plus minimal per-model access checks against a remote Ollama host.
 - `pipeline_check.ipynb`: end-to-end index plus recommendation smoke test.
-
-The older `mimic_umls_pipeline.ipynb` is slower because it can combine:
-
-- all-note extraction,
-- optional online UMLS normalization,
-- repeated full graph rebuilds across model combinations,
-- artifact rendering inside the benchmark loop,
-- and in-process `vllm_offline` model loading.
 
 ## Notes
 

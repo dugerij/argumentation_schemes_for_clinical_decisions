@@ -6,10 +6,8 @@
 
 completion_models:
   default_completion_model:
-    model_provider: ${GENERATION_MODEL_PROVIDER} # set this in the generated .env file
+    model_provider: ollama
     model: ${GENERATOR_MODEL}
-    auth_method: ${COMPLETION_MODEL_AUTH_TYPE}
-    api_key: ${GRAPHRAG_API_KEY} # set this in the generated .env file, or remove if managed identity
     retry_strategy: native
     max_retries: -1                   # set to -1 for dynamic retry logic (most optimal setting based on server response)
     tokens_per_minute: 0              # set to 0 to disable rate limiting
@@ -17,10 +15,8 @@ completion_models:
 
 embedding_models:
   default_embedding_model:
-    model_provider: ${RAG_EMBEDDING_MODEL_PROVIDER}
+    model_provider: ollama
     model: ${RAG_EMBEDDING_MODEL}
-    auth_method: ${EMBEDDING_MODEL_AUTH_TYPE}
-    api_key: ${GRAPHRAG_API_KEY}
     retry_strategy: native
     max_retries: -1                   # set to -1 for dynamic retry logic (most optimal setting based on server response)
     tokens_per_minute: 0              # set to 0 to disable rate limiting

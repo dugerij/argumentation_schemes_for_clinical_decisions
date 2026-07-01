@@ -22,6 +22,7 @@ from entity_extraction.medical_schema import (
 )
 from entity_extraction.umls import UMLSClient, UMLSConfig
 from helpers.config import env_bool, env_int
+from helpers.ollama import assert_ollama_available, ollama_endpoint
 from helpers.jsonl import JsonlLogger, new_run_id
 
 
@@ -33,8 +34,6 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_SCHEMA_HIT_LIMIT = 120
 INDEX_EVENT_LOG = Path("logs/framework/index_build.jsonl")
 DEFAULT_LLM_REQUEST_TIMEOUT = 180.0
-
-
 def source_documents(input_dir: Path) -> list[Path]:
     if not input_dir.exists():
         return []
@@ -214,92 +213,29 @@ def build_schema_guidance(documents: list[Path], input_dir: Path) -> ClinicalSch
 
 
 def build_llm():
-    provider = os.environ.get("INDEX_LLM_PROVIDER", os.environ.get("GENERATION_MODEL_PROVIDER", "ollama")).strip().lower()
     model_name = os.environ.get("INDEX_LLM_MODEL", os.environ.get("GENERATOR_MODEL", "")).strip()
     request_timeout = float(os.environ.get("INDEX_LLM_REQUEST_TIMEOUT", str(DEFAULT_LLM_REQUEST_TIMEOUT)))
+    from llama_index.llms.ollama import Ollama
 
-    if provider == "vllm":
-        from llama_index.llms.openai import OpenAI
-
-        return OpenAI(
-            model=model_name or os.environ.get("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
-            api_key=os.environ.get("VLLM_API_KEY", "EMPTY"),
-            api_base=os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
-            timeout=request_timeout,
-        )
-
-    if provider == "vllm_offline":
-        from rag.vllm_offline import build_offline_llm
-
-        return build_offline_llm(model_name or os.environ.get("VLLM_MODEL"))
-
-    if provider == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            provider = "ollama"
-        else:
-            from llama_index.llms.openai import OpenAI
-
-            return OpenAI(
-                model=model_name or "gpt-4.1-mini",
-                api_key=api_key,
-                timeout=request_timeout,
-            )
-
-    if provider == "ollama":
-        from llama_index.llms.ollama import Ollama
-
-        return Ollama(
-            model=model_name or "llama3.1",
-            base_url=os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434"),
-            request_timeout=request_timeout,
-        )
-
-    raise ValueError(f"Unsupported LLM provider for LlamaIndex: {provider}")
+    resolved_model = model_name or "llama3.1"
+    assert_ollama_available(role="LLM", model_name=resolved_model)
+    return Ollama(
+        model=resolved_model,
+        base_url=ollama_endpoint(),
+        request_timeout=request_timeout,
+    )
 
 
 def build_embed_model():
-    provider = os.environ.get(
-        "INDEX_EMBEDDING_PROVIDER",
-        os.environ.get("RAG_EMBEDDING_MODEL_PROVIDER", "ollama"),
-    ).strip().lower()
     model_name = os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")).strip()
+    from llama_index.embeddings.ollama import OllamaEmbedding
 
-    if provider == "vllm":
-        from llama_index.embeddings.openai import OpenAIEmbedding
-
-        return OpenAIEmbedding(
-            model=model_name or os.environ.get("VLLM_EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5"),
-            api_key=os.environ.get("VLLM_API_KEY", "EMPTY"),
-            api_base=os.environ.get(
-                "VLLM_EMBEDDING_BASE_URL",
-                os.environ.get("VLLM_BASE_URL", "http://127.0.0.1:8000/v1"),
-            ),
-        )
-
-    if provider == "vllm_offline":
-        from rag.vllm_offline import build_offline_embedding
-
-        return build_offline_embedding(model_name or os.environ.get("VLLM_EMBEDDING_MODEL"))
-
-    if provider == "openai":
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            provider = "ollama"
-        else:
-            from llama_index.embeddings.openai import OpenAIEmbedding
-
-            return OpenAIEmbedding(model=model_name or "text-embedding-3-small", api_key=api_key)
-
-    if provider == "ollama":
-        from llama_index.embeddings.ollama import OllamaEmbedding
-
-        return OllamaEmbedding(
-            model_name=model_name or "embeddinggemma:300m",
-            base_url=os.environ.get("OLLAMA_ENDPOINT", "http://localhost:11434"),
-        )
-
-    raise ValueError(f"Unsupported embedding provider for LlamaIndex: {provider}")
+    resolved_model = model_name or "embeddinggemma:300m"
+    assert_ollama_available(role="embedding", model_name=resolved_model)
+    return OllamaEmbedding(
+        model_name=resolved_model,
+        base_url=ollama_endpoint(),
+    )
 
 
 def manifest_path(output_dir: Path) -> Path:

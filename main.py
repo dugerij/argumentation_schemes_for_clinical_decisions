@@ -34,7 +34,6 @@ def parse_args() -> argparse.Namespace:
     recommend.add_argument("--no-rag", action="store_true")
 
     benchmark = subparsers.add_parser("benchmark-embeddings", help="Benchmark embedding models.")
-    benchmark.add_argument("--provider", default="vllm")
     benchmark.add_argument("--generation-model", required=True)
     benchmark.add_argument("--embedding-model", action="append", dest="embedding_models", required=True)
     benchmark.add_argument("--output-root", default="output/embedding_benchmark")
@@ -47,7 +46,6 @@ def parse_args() -> argparse.Namespace:
     benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
 
     model_benchmark = subparsers.add_parser("benchmark-models", help="Benchmark generation models with a fixed embedding model.")
-    model_benchmark.add_argument("--provider", default="vllm")
     model_benchmark.add_argument("--generation-model", action="append", dest="generation_models", required=True)
     model_benchmark.add_argument("--embedding-model", required=True)
     model_benchmark.add_argument("--output-root", default="output/model_benchmark")
@@ -121,7 +119,6 @@ def main() -> None:
                     output_root=Path(args.output_root),
                     generation_model=args.generation_model,
                     embedding_models=tuple(args.embedding_models),
-                    provider=args.provider,
                     use_umls=args.use_umls,
                     schema_guided=args.schema_guided,
                     mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),
@@ -144,7 +141,6 @@ def main() -> None:
                     output_root=Path(args.output_root),
                     generation_models=tuple(args.generation_models),
                     embedding_model=args.embedding_model,
-                    provider=args.provider,
                     use_umls=args.use_umls,
                     schema_guided=args.schema_guided,
                     mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),

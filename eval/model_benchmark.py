@@ -12,7 +12,6 @@ from typing import Any
 from dotenv import load_dotenv
 
 from eval.embedding_benchmark import (
-    DEFAULT_DATA_CANDIDATES,
     discover_questions_path,
     load_benchmark_questions,
     model_slug,
@@ -34,7 +33,6 @@ class ModelBenchmarkConfig:
     output_root: Path
     generation_models: tuple[str, ...]
     embedding_model: str
-    provider: str = "vllm"
     use_umls: bool = False
     schema_guided: bool = False
     note_limit: int | None = 25
@@ -57,7 +55,7 @@ class ModelBenchmarkResult:
     exact_match: float | None
     use_umls: bool
     schema_guided: bool
-    provider: str
+    provider: str = "ollama"
 
 
 async def run_model_benchmark(
@@ -82,7 +80,7 @@ async def run_model_benchmark(
     logger.event(
         "model_benchmark",
         "started",
-        provider=config.provider,
+        provider="ollama",
         generation_models=list(config.generation_models),
         embedding_model=config.embedding_model,
         use_umls=config.use_umls,
@@ -93,17 +91,13 @@ async def run_model_benchmark(
         questions_path=questions_path,
     )
 
-    os.environ["INDEX_LLM_PROVIDER"] = config.provider
-    os.environ["INDEX_EMBEDDING_PROVIDER"] = config.provider
+    os.environ["INDEX_LLM_PROVIDER"] = "ollama"
+    os.environ["INDEX_EMBEDDING_PROVIDER"] = "ollama"
     os.environ["INDEX_EMBEDDING_MODEL"] = config.embedding_model
-    if config.provider in {"vllm", "vllm_offline"}:
-        os.environ["VLLM_EMBEDDING_MODEL"] = config.embedding_model
 
     results: list[ModelBenchmarkResult] = []
     for generation_model in config.generation_models:
         os.environ["INDEX_LLM_MODEL"] = generation_model
-        if config.provider in {"vllm", "vllm_offline"}:
-            os.environ["VLLM_MODEL"] = generation_model
 
         slug = model_slug(generation_model)
         index_dir = config.output_root / slug
@@ -149,7 +143,7 @@ async def run_model_benchmark(
             exact_match=exact_match,
             use_umls=config.use_umls,
             schema_guided=config.schema_guided,
-            provider=config.provider,
+            provider="ollama",
         )
         results.append(result)
         logger.event("generation_model", "completed", **asdict(result))
@@ -165,7 +159,6 @@ async def run_model_benchmark(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark generation models for the clinical RAG pipeline.")
-    parser.add_argument("--provider", default="vllm", choices=("vllm", "vllm_offline", "ollama", "openai"))
     parser.add_argument("--generation-model", action="append", dest="generation_models", required=True)
     parser.add_argument("--embedding-model", required=True)
     parser.add_argument("--input-dir", default=os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
@@ -192,7 +185,6 @@ def main() -> None:
                 output_root=Path(args.output_root),
                 generation_models=tuple(args.generation_models),
                 embedding_model=args.embedding_model,
-                provider=args.provider,
                 use_umls=args.use_umls,
                 schema_guided=args.schema_guided,
                 note_limit=parse_optional_int(args.note_limit, default=25),
