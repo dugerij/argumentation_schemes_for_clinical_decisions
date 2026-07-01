@@ -17,6 +17,7 @@ python-dotenv==1.0.1
 
 # Clinical NLP / future UMLS-MEDCIN integration helpers
 requests==2.33.1
+tqdm==4.67.1
 
 # Local results API
 fastapi==0.125.0

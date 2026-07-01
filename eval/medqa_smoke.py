@@ -6,6 +6,7 @@ from pathlib import Path
 
 from helpers.jsonl import JsonlLogger
 from helpers.paths import EVAL_RECORD_LOG_PATH, EVENT_LOG_PATH
+from helpers.progress import iter_progress, progress_message
 from helpers.records import write_eval_record
 from retrieval.index import ensure_index
 from retrieval.query import query_index_context
@@ -70,13 +71,16 @@ async def run_medqa_smoke_eval(
             input_dir,
             output_dir,
         )
-    print("Index loaded.")
+    progress_message("Index loaded.")
 
     with event_logger.timed("load_medqa_questions", data_path=data_path, sample_size=sample_size):
         questions = load_questions(data_path, sample_size)
     correct = 0
 
-    for question_index, data in enumerate(questions, start=1):
+    for question_index, data in enumerate(
+        iter_progress(questions, desc="MedQA questions", total=len(questions), unit="question"),
+        start=1,
+    ):
         options = data["options"]
         expected_answer = data["answer"]
         question = f"{data['question']}\n{format_options(options)}"
@@ -140,16 +144,13 @@ async def run_medqa_smoke_eval(
             correct=is_correct,
         )
 
-        print(f"\n--- Q{question_index} ---")
-        print("Question:", question)
-        print("Expected:", expected_answer)
-        print("Predicted:", predicted)
-        print("Correct:", is_correct)
-        print("Response:", response)
+        progress_message(
+            f"Q{question_index}: expected={expected_answer}, predicted={predicted}, correct={is_correct}"
+        )
 
     accuracy = correct / len(questions)
     event_logger.event("medqa_smoke_eval", "completed", accuracy=accuracy, total=len(questions), correct=correct)
-    print(f"\nFinal Accuracy: {accuracy:.2f}")
-    print(f"Run ID: {event_logger.run_id}")
-    print(f"Event log: {event_log_path}")
-    print(f"Evaluation records: {eval_log_path}")
+    progress_message(f"Final Accuracy: {accuracy:.2f}")
+    progress_message(f"Run ID: {event_logger.run_id}")
+    progress_message(f"Event log: {event_log_path}")
+    progress_message(f"Evaluation records: {eval_log_path}")

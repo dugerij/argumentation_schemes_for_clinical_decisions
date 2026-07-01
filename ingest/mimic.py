@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from helpers.progress import iter_progress, progress_message
+
 
 @dataclass(frozen=True)
 class MimicDischargeSubsetConfig:
@@ -61,8 +63,11 @@ def extract_mimic_discharge_subset(config: MimicDischargeSubsetConfig) -> list[P
 
     written: list[Path] = []
     rows = _rows_from_csv(config.csv_path)
+    progress_message(
+        f"Extracting MIMIC discharge notes from {config.csv_path} into {config.output_dir}"
+    )
 
-    for row in rows:
+    for row in iter_progress(rows, desc="MIMIC notes", unit="row"):
         if config.note_type and _normalize(row.get("note_type")).upper() != config.note_type.upper():
             continue
 
@@ -91,5 +96,6 @@ def extract_mimic_discharge_subset(config: MimicDischargeSubsetConfig) -> list[P
         json.dumps(manifest, indent=2),
         encoding="utf-8",
     )
+    progress_message(f"Wrote {len(written)} note files to {config.output_dir}")
 
     return written

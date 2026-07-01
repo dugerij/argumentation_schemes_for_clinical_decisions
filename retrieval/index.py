@@ -12,6 +12,7 @@ from helpers.config import env_bool, env_int
 from helpers.jsonl import JsonlLogger, new_run_id
 from helpers.ollama import assert_ollama_available, ollama_endpoint
 from helpers.paths import INDEX_BUILD_LOG_PATH
+from helpers.progress import iter_progress, progress_message
 from retrieval.concepts.candidates import extract_candidate_terms
 from retrieval.concepts.extractor import UMLSConceptExtractor
 from retrieval.concepts.medical_schema import (
@@ -423,19 +424,22 @@ def ensure_index(
 
     needs_rebuild, reasons = index_needs_rebuild(output_dir, input_dir, schema_guided=schema_guided)
     if not needs_rebuild:
-        print(f"Using existing LlamaIndex property graph in {output_dir}")
+        progress_message(f"Using existing LlamaIndex property graph in {output_dir}")
         event_logger.event("index_build", "completed", reused_existing_index=True, output_dir=output_dir)
         return load_index(output_dir)
 
-    print("LlamaIndex index is missing or incompatible:")
+    progress_message("LlamaIndex index is missing or incompatible:")
     for reason in reasons:
-        print(f"  - {reason}")
+        progress_message(f"  - {reason}")
 
     documents = source_documents(input_dir)
     if use_umls and not env_bool("UMLS_ENABLED", False):
         raise ValueError("UMLS_ENABLED must be true to build a UMLS-guided medical index.")
 
     guidance = build_schema_guidance(documents, input_dir) if use_umls else None
+    progress_message(
+        f"Preparing index build for {len(documents)} source document(s) into {output_dir}"
+    )
     event_logger.event(
         "schema_guidance",
         "completed",
@@ -467,7 +471,16 @@ def ensure_index(
 
     for attempt in range(1, max_retries + 1):
         try:
-            for batch in batches:
+            progress_message(f"Index build attempt {attempt}/{max_retries}")
+            for batch_number, batch in enumerate(
+                iter_progress(
+                    batches,
+                    desc=f"Index batches (attempt {attempt})",
+                    total=len(batches),
+                    unit="batch",
+                ),
+                start=1,
+            ):
                 event_logger.event(
                     "index_batch",
                     "started",
@@ -484,9 +497,17 @@ def ensure_index(
                     )
                     for path in batch
                 ]
+                progress_message(
+                    f"Batch {batch_number}/{len(batches)}: inserting {len(batch_docs)} document(s)"
+                )
                 for doc in batch_docs:
                     mark_status(conn, doc.id_, "in_progress")
-                for doc in batch_docs:
+                for doc in iter_progress(
+                    batch_docs,
+                    desc=f"Docs in batch {batch_number}",
+                    total=len(batch_docs),
+                    unit="doc",
+                ):
                     source_path = doc.metadata.get("source_path")
                     source_name = doc.metadata.get("source_name")
                     hint_count = 0
@@ -544,7 +565,7 @@ def ensure_index(
                     )
                 for doc in batch_docs:
                     mark_status(conn, doc.id_, "done")
-                print(f"Indexed batch of {len(batch_docs)} docs")
+                progress_message(f"Indexed batch of {len(batch_docs)} document(s)")
                 event_logger.event(
                     "index_batch",
                     "completed",
@@ -567,6 +588,7 @@ def ensure_index(
                 schema_guided=schema_guided,
                 umls_enabled=use_umls,
             )
+            progress_message(f"Index build completed: {output_dir}")
             return index
         except Exception as exc:
             last_error = exc
@@ -602,7 +624,7 @@ def ensure_index(
                 error=str(exc),
                 traceback=last_error_traceback,
             )
-            print(f"Attempt {attempt} failed: {exc}. Retrying in {wait}s...")
+            progress_message(f"Attempt {attempt} failed: {exc}. Retrying in {wait}s...")
             time.sleep(wait)
 
     event_logger.event(

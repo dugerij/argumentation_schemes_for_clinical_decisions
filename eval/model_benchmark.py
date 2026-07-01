@@ -21,6 +21,7 @@ from eval.medqa_smoke import extract_answer, format_options
 from helpers.config import env_bool, parse_optional_int, startup_check
 from helpers.jsonl import JsonlLogger
 from helpers.paths import MODEL_BENCHMARK_LOG_PATH
+from helpers.progress import iter_progress, progress_message
 from retrieval.index import ensure_index
 from retrieval.query import query_index_context
 
@@ -97,12 +98,21 @@ async def run_model_benchmark(
     os.environ["INDEX_EMBEDDING_MODEL"] = config.embedding_model
 
     results: list[ModelBenchmarkResult] = []
-    for generation_model in config.generation_models:
+    progress_message(
+        f"Running model benchmark for {len(config.generation_models)} generation model(s) over {len(questions)} question(s)"
+    )
+    for generation_model in iter_progress(
+        config.generation_models,
+        desc="Generation models",
+        total=len(config.generation_models),
+        unit="model",
+    ):
         os.environ["INDEX_LLM_MODEL"] = generation_model
 
         slug = model_slug(generation_model)
         index_dir = config.output_root / slug
         logger.event("generation_model", "started", generation_model=generation_model, index_dir=index_dir)
+        progress_message(f"Building index for generation model `{generation_model}`")
 
         build_started = time.perf_counter()
         index = await asyncio.to_thread(
@@ -116,7 +126,12 @@ async def run_model_benchmark(
 
         exact_matches: list[float] = []
         query_durations: list[float] = []
-        for item in questions:
+        for item in iter_progress(
+            questions,
+            desc=f"Questions [{generation_model}]",
+            total=len(questions),
+            unit="question",
+        ):
             prompt = item["question"]
             options = item.get("options") or {}
             if options:
@@ -148,6 +163,9 @@ async def run_model_benchmark(
         )
         results.append(result)
         logger.event("generation_model", "completed", **asdict(result))
+        progress_message(
+            f"Completed `{generation_model}`: build={build_seconds}s, mean_query={mean_query_seconds}s, exact_match={exact_match}"
+        )
 
     summary_path = config.output_root / "model_benchmark_results.json"
     summary_path.write_text(
@@ -155,6 +173,7 @@ async def run_model_benchmark(
         encoding="utf-8",
     )
     logger.event("model_benchmark", "completed", summary_path=summary_path, result_count=len(results))
+    progress_message(f"Model benchmark summary written to {summary_path}")
     return results
 
 

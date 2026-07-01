@@ -15,6 +15,7 @@ from eval.medqa_smoke import extract_answer, format_options, load_questions
 from helpers.config import env_bool, parse_optional_int, startup_check
 from helpers.jsonl import JsonlLogger
 from helpers.paths import EMBEDDING_BENCHMARK_LOG_PATH
+from helpers.progress import iter_progress, progress_message
 from ingest.mimic import MimicDischargeSubsetConfig, extract_mimic_discharge_subset
 from retrieval.index import ensure_index
 from retrieval.query import query_index_context
@@ -152,12 +153,21 @@ async def run_embedding_benchmark(
     os.environ["INDEX_LLM_MODEL"] = config.generation_model
 
     results: list[EmbeddingBenchmarkResult] = []
-    for embedding_model in config.embedding_models:
+    progress_message(
+        f"Running embedding benchmark for {len(config.embedding_models)} embedding model(s) over {len(questions)} question(s)"
+    )
+    for embedding_model in iter_progress(
+        config.embedding_models,
+        desc="Embedding models",
+        total=len(config.embedding_models),
+        unit="model",
+    ):
         os.environ["INDEX_EMBEDDING_MODEL"] = embedding_model
 
         slug = model_slug(embedding_model)
         index_dir = config.output_root / slug
         logger.event("embedding_model", "started", embedding_model=embedding_model, index_dir=index_dir)
+        progress_message(f"Building index for embedding model `{embedding_model}`")
 
         build_started = time.perf_counter()
         index = await asyncio.to_thread(
@@ -171,7 +181,12 @@ async def run_embedding_benchmark(
 
         exact_matches: list[float] = []
         query_durations: list[float] = []
-        for item in questions:
+        for item in iter_progress(
+            questions,
+            desc=f"Questions [{embedding_model}]",
+            total=len(questions),
+            unit="question",
+        ):
             prompt = item["question"]
             options = item.get("options") or {}
             if options:
@@ -203,6 +218,9 @@ async def run_embedding_benchmark(
         )
         results.append(result)
         logger.event("embedding_model", "completed", **asdict(result))
+        progress_message(
+            f"Completed `{embedding_model}`: build={build_seconds}s, mean_query={mean_query_seconds}s, exact_match={exact_match}"
+        )
 
     summary_path = config.output_root / "embedding_benchmark_results.json"
     summary_path.write_text(
@@ -210,6 +228,7 @@ async def run_embedding_benchmark(
         encoding="utf-8",
     )
     logger.event("embedding_benchmark", "completed", summary_path=summary_path, result_count=len(results))
+    progress_message(f"Embedding benchmark summary written to {summary_path}")
     return results
 
 

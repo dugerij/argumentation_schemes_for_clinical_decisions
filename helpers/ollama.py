@@ -7,7 +7,7 @@ import urllib.request
 from typing import Any
 
 
-DEFAULT_OLLAMA_ENDPOINT = "http://127.0.0.1:11434"
+DEFAULT_OLLAMA_ENDPOINT = "http://10.0.0.201:8000"
 DEFAULT_OLLAMA_TIMEOUT = 180.0
 
 
