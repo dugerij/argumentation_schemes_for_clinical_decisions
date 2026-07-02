@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from eval.question_subset import filter_questions_for_domain_and_notes
+from helpers.clinical_domains import HybridDomainMatcher
 from ingest.mimic import MimicDischargeDomainSubsetConfig, extract_mimic_discharge_domain_subset
 
 
@@ -103,3 +104,23 @@ def test_filter_questions_for_domain_and_notes_keeps_all_relevant_questions(tmp_
     ]
     included = [row for row in result.metadata if row["included"]]
     assert len(included) == 2
+
+
+def test_hybrid_domain_matcher_skips_umls_when_keyword_prefilter_misses():
+    class _StubMatcher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def match_details(self, text: str):
+            self.calls += 1
+            return 1, ["ckd"]
+
+    stub = _StubMatcher()
+    matcher = HybridDomainMatcher("renal_metabolic", stub, prefilter_min_hits=1)
+
+    misses = matcher.match_details("Ankle fracture after a fall.")
+    hits = matcher.match_details("Chronic kidney disease with dialysis planning.")
+
+    assert misses == (0, [])
+    assert hits == (1, ["ckd"])
+    assert stub.calls == 1

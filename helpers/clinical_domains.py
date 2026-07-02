@@ -123,6 +123,15 @@ class DomainMatcher(Protocol):
     def match_details(self, text: str) -> tuple[int, list[str]]: ...
 
 
+class KeywordDomainMatcher:
+    def __init__(self, domain: str):
+        self.domain = normalize_domain_name(domain)
+
+    def match_details(self, text: str) -> tuple[int, list[str]]:
+        hits = sorted(domain_hit_terms(text, self.domain))
+        return len(hits), hits
+
+
 class UMLSDomainMatcher:
     def __init__(self, client: UMLSClient, domain: str, *, candidate_limit: int = 120):
         self.domain = normalize_domain_name(domain)
@@ -161,3 +170,20 @@ class UMLSDomainMatcher:
                     seen.add(key)
                     matched.append(concept.preferred_term if concept and concept.preferred_term else mention.text)
         return len(matched), matched
+
+
+class HybridDomainMatcher:
+    def __init__(self, domain: str, umls_matcher: DomainMatcher, *, prefilter_min_hits: int = 1):
+        self.domain = normalize_domain_name(domain)
+        self.prefilter = KeywordDomainMatcher(self.domain)
+        self.umls_matcher = umls_matcher
+        self.prefilter_min_hits = max(1, prefilter_min_hits)
+
+    def match_details(self, text: str) -> tuple[int, list[str]]:
+        keyword_hits, keyword_terms = self.prefilter.match_details(text)
+        if keyword_hits < self.prefilter_min_hits:
+            return 0, []
+        umls_hits, umls_terms = self.umls_matcher.match_details(text)
+        if umls_hits > 0:
+            return umls_hits, umls_terms
+        return 0, []

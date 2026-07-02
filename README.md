@@ -99,7 +99,7 @@ python make_domain_subset.py \
   --question-limit all
 ```
 
-This command uses UMLS matching by default and requires `UMLS_API_KEY`. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain. Use `--matcher keyword` to fall back to term-based matching.
+This command uses a fast keyword prefilter plus UMLS confirmation by default and requires `UMLS_API_KEY`. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain. Use `--matcher umls` for UMLS-only matching or `--matcher keyword` for term-based matching.
 
 ### Build the Knowledge Graph
 

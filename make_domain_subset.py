@@ -13,7 +13,7 @@ from eval.question_subset import (
     load_questions_jsonl,
     write_questions_jsonl,
 )
-from helpers.clinical_domains import UMLSDomainMatcher, normalize_domain_name
+from helpers.clinical_domains import HybridDomainMatcher, UMLSDomainMatcher, normalize_domain_name
 from helpers.config import parse_optional_int
 from ingest.mimic import MimicDischargeDomainSubsetConfig, extract_mimic_discharge_domain_subset
 from retrieval.concepts.umls import UMLSClient, UMLSConfig
@@ -32,15 +32,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--note-type", default=os.environ.get("MIMIC_DISCHARGE_NOTE_TYPE", "DS"))
     parser.add_argument("--min-domain-hits", type=int, default=1)
     parser.add_argument("--min-question-overlap", type=int, default=2)
-    parser.add_argument("--matcher", choices=("umls", "keyword"), default="umls")
+    parser.add_argument("--matcher", choices=("hybrid", "umls", "keyword"), default="hybrid")
+    parser.add_argument("--prefilter-min-hits", type=int, default=1)
     return parser.parse_args()
 
 
-def build_domain_matcher(domain: str, matcher: str):
+def build_domain_matcher(domain: str, matcher: str, *, prefilter_min_hits: int = 1):
     if matcher == "keyword":
         return None
     client = UMLSClient(UMLSConfig.from_env())
-    return UMLSDomainMatcher(client, domain)
+    umls_matcher = UMLSDomainMatcher(client, domain)
+    if matcher == "umls":
+        return umls_matcher
+    return HybridDomainMatcher(domain, umls_matcher, prefilter_min_hits=prefilter_min_hits)
 
 
 def main() -> None:
@@ -58,7 +62,7 @@ def main() -> None:
     note_limit = parse_optional_int(args.note_limit, default=None)
     question_limit = parse_optional_int(args.question_limit, default=None)
     note_max_chars = parse_optional_int(args.note_max_chars, default=6000)
-    domain_matcher = build_domain_matcher(domain, args.matcher)
+    domain_matcher = build_domain_matcher(domain, args.matcher, prefilter_min_hits=args.prefilter_min_hits)
 
     written_notes = extract_mimic_discharge_domain_subset(
         MimicDischargeDomainSubsetConfig(
@@ -98,6 +102,7 @@ def main() -> None:
         "min_domain_hits": args.min_domain_hits,
         "min_question_overlap": args.min_question_overlap,
         "matcher": args.matcher,
+        "prefilter_min_hits": args.prefilter_min_hits,
     }
     questions_output_path.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     questions_output_path.with_suffix(".selection.json").write_text(json.dumps(result.metadata, indent=2), encoding="utf-8")
