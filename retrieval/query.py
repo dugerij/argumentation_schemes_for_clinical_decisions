@@ -1,7 +1,8 @@
 import re
+from math import sqrt
 from typing import Any
 
-from retrieval.index import build_llm
+from retrieval.index import build_embed_model, build_llm
 
 
 RELATION_STRING_RE = re.compile(
@@ -121,12 +122,51 @@ def _source_node_text(source_node: Any, graph_store: Any | None = None) -> str:
     return _compact_text(str(node))
 
 
-async def query_index_context(
+def _source_node_score(source_node: Any) -> float | None:
+    score = getattr(source_node, "score", None)
+    if score is None:
+        return None
+    try:
+        return float(score)
+    except (TypeError, ValueError):
+        return None
+
+
+def _dot(left: list[float], right: list[float]) -> float:
+    return sum(a * b for a, b in zip(left, right))
+
+
+def _norm(values: list[float]) -> float:
+    return sqrt(sum(value * value for value in values))
+
+
+def _cosine_similarity(left: list[float], right: list[float]) -> float | None:
+    if not left or not right or len(left) != len(right):
+        return None
+    left_norm = _norm(left)
+    right_norm = _norm(right)
+    if left_norm == 0 or right_norm == 0:
+        return None
+    return _dot(left, right) / (left_norm * right_norm)
+
+
+def _embed_text(embed_model: Any, text: str) -> list[float]:
+    if hasattr(embed_model, "get_text_embedding"):
+        return list(embed_model.get_text_embedding(text))
+    if hasattr(embed_model, "embed"):
+        embedded = embed_model.embed(text)
+        if isinstance(embedded, list):
+            return [float(value) for value in embedded]
+    raise AttributeError("Embedding model does not expose a supported embedding method.")
+
+
+async def query_index_with_diagnostics(
     index,
     query: str,
     similarity_top_k: int = 5,
     llm: Any | None = None,
-) -> tuple[str, str]:
+    embed_model: Any | None = None,
+) -> tuple[str, str, dict[str, Any]]:
     index_llm = getattr(index, "_llm", None)
     query_engine = index.as_query_engine(
         similarity_top_k=similarity_top_k,
@@ -136,9 +176,61 @@ async def query_index_context(
     source_nodes = getattr(response, "source_nodes", None) or []
     graph_store = _graph_store(index)
     context_parts = []
+    retrieval_scores: list[float] = []
     for node in source_nodes:
         text = _source_node_text(node, graph_store=graph_store)
         if text.strip():
             context_parts.append(text)
+        score = _source_node_score(node)
+        if score is not None:
+            retrieval_scores.append(score)
+
     context = "\n\n".join(context_parts) if context_parts else str(response)
+
+    cosine_similarities: list[float] = []
+    if source_nodes:
+        resolved_embed_model = embed_model or getattr(index, "_embed_model", None) or build_embed_model()
+        query_embedding = _embed_text(resolved_embed_model, query)
+        for node in source_nodes:
+            node_text = _source_node_text(node, graph_store=graph_store)
+            if not node_text.strip():
+                continue
+            similarity = _cosine_similarity(query_embedding, _embed_text(resolved_embed_model, node_text))
+            if similarity is not None:
+                cosine_similarities.append(similarity)
+
+    diagnostics = {
+        "source_count": len(source_nodes),
+        "retrieval_scores": retrieval_scores,
+        "cosine_similarities": cosine_similarities,
+        "top_retrieval_score": retrieval_scores[0] if retrieval_scores else None,
+        "mean_retrieval_score": (sum(retrieval_scores) / len(retrieval_scores)) if retrieval_scores else None,
+        "retrieval_score_margin": (
+            retrieval_scores[0] - retrieval_scores[1]
+            if len(retrieval_scores) >= 2
+            else None
+        ),
+        "top_cosine_similarity": cosine_similarities[0] if cosine_similarities else None,
+        "mean_cosine_similarity": (sum(cosine_similarities) / len(cosine_similarities)) if cosine_similarities else None,
+        "cosine_similarity_margin": (
+            cosine_similarities[0] - cosine_similarities[1]
+            if len(cosine_similarities) >= 2
+            else None
+        ),
+    }
+    return str(response), context, diagnostics
+
+
+async def query_index_context(
+    index,
+    query: str,
+    similarity_top_k: int = 5,
+    llm: Any | None = None,
+) -> tuple[str, str]:
+    response, context, _diagnostics = await query_index_with_diagnostics(
+        index=index,
+        query=query,
+        similarity_top_k=similarity_top_k,
+        llm=llm,
+    )
     return str(response), context

@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("smoke-eval", help="Run the MedQA smoke evaluation.")
 
     serve_api = subparsers.add_parser("serve-api", help="Start the FastAPI server.")
-    serve_api.add_argument("--host", default="127.0.0.1")
+    serve_api.add_argument("--host", default="10.0.0.201")
     serve_api.add_argument("--port", type=int, default=8000)
     serve_api.add_argument("--reload", action="store_true")
 

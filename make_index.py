@@ -12,13 +12,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Indexing and evidence ingestion utilities.")
     parser.add_argument(
         "command",
-        choices=("build", "build-schema", "extract-mimic-discharge"),
+        choices=("build", "build-schema", "extract-mimic-discharge", "extract-mimic-ext-cardiovascular"),
         help="Build the index, build the schema-guided index, or extract a MIMIC discharge subset.",
     )
     parser.add_argument("--input-dir", default=None, help="Directory containing source .txt files.")
     parser.add_argument("--output-dir", default=None, help="Directory used to persist the index.")
-    parser.add_argument("--limit", default="25", help="Maximum number of MIMIC notes to extract, or 'all'.")
+    parser.add_argument("--limit", default="all", help="Maximum number of MIMIC notes to extract, or 'all'.")
     parser.add_argument("--csv-path", default=None, help="MIMIC discharge CSV to subset.")
+    parser.add_argument("--dataset-dir", default=None, help="MIMIC-IV-Ext dataset directory to subset.")
     parser.add_argument("--max-chars", default="6000", help="Maximum characters per extracted note, or 'all'.")
     parser.add_argument("--note-type", default="DS", help="MIMIC note type to keep.")
     return parser.parse_args()
@@ -40,13 +41,38 @@ def main() -> None:
             MimicDischargeSubsetConfig(
                 csv_path=csv_path,
                 output_dir=input_dir,
-                limit=env_optional_int("MIMIC_DISCHARGE_LIMIT", parse_optional_int(args.limit, default=25)),
+                limit=env_optional_int("MIMIC_DISCHARGE_LIMIT", parse_optional_int(args.limit)),
                 note_type=os.environ.get("MIMIC_DISCHARGE_NOTE_TYPE", args.note_type),
                 max_chars=env_optional_int("MIMIC_DISCHARGE_MAX_CHARS", parse_optional_int(args.max_chars, default=6000)),
                 overwrite=True,
             )
         )
         print(f"Extracted {len(manifest)} MIMIC discharge notes into {input_dir}")
+        return
+
+    if args.command == "extract-mimic-ext-cardiovascular":
+        from ingest.mimic import (
+            MimicExtCardiovascularSubsetConfig,
+            extract_mimic_ext_cardiovascular_subset,
+        )
+
+        dataset_dir = Path(
+            args.dataset_dir
+            or os.environ.get(
+                "MIMIC_EXT_DATASET_DIR",
+                "data/mimic-iv-ext-clinical-decision-support-for-referral-triage-and-diagnosis-1.0.2",
+            )
+        )
+        manifest = extract_mimic_ext_cardiovascular_subset(
+            MimicExtCardiovascularSubsetConfig(
+                dataset_dir=dataset_dir,
+                output_dir=input_dir,
+                limit=env_optional_int("MIMIC_EXT_LIMIT", parse_optional_int(args.limit, default=100)),
+                max_chars=env_optional_int("MIMIC_EXT_MAX_CHARS", parse_optional_int(args.max_chars, default=4000)),
+                overwrite=True,
+            )
+        )
+        print(f"Extracted {len(manifest)} MIMIC-IV-Ext cardiovascular cases into {input_dir}")
         return
 
     ensure_index(

@@ -1,161 +1,141 @@
 # Argumentation Schemes for Clinical Reasoning
 
-This repository builds an auditable clinical reasoning pipeline that combines evidence-grounded retrieval, structured medical argumentation, and formal Abstract Argumentation Framework adjudication.
+Clinical reasoning pipeline built around UMLS-guided knowledge graphs, evidence-grounded retrieval, structured argumentation, and Abstract Argumentation Framework adjudication.
 
 Supporting documentation:
 
 - [Local Data Sources](docs/data_sources.md)
 - [Argumentation Framework Comparison](docs/framework_comparison.md)
 
-The target corpus is:
+Target data:
 
 - MIMIC-IV notes after approval
 - UMLS/MEDCIN-normalized clinical concepts
 
-The current MedQA files are smoke-test inputs only. They are useful for checking that the pipeline runs, but they are not the final evaluation corpus.
+The included MedQA files are lightweight pipeline-check inputs.
 
-## Pipeline
+## Overview
 
-1. **UMLS Clinical Normalization**
-   UMLS/MEDCIN is the first step for all medical indexing. It identifies clinical entities, filters text toward medically relevant mentions, and seeds relationship hints before graph construction. The default vocabulary priority covers diagnoses, medications, procedures, therapies, labs, and broad clinical findings:
+Main stages:
 
-   ```text
-   ICD10CM, SNOMEDCT_US, RXNORM, ATC, CPT, HCPCS, LNC, MEDCIN, MSH
-   ```
+1. normalize clinical entities with UMLS/MEDCIN
+2. build a LlamaIndex property graph from evidence documents
+3. retrieve grounded passages for downstream reasoning
+4. instantiate argumentation schemes and attacks
+5. resolve conflicts under grounded AAF semantics
 
-2. **Evidence Graph Construction**
-   LlamaIndex builds a property graph from UMLS-annotated evidence sources and retrieves supporting passages for downstream reasoning. The goal is to ground reasoning in inspectable evidence rather than statistical associations.
+Default clinical vocabulary priority:
 
-3. **Structured Argument Generation**
-   Multi-agent LLM components generate candidate clinical recommendations and instantiate argumentation schemes such as goal-oriented practical reasoning, contraindication checks, adverse-effect checks, and history/failure checks.
-
-4. **Formal Adjudication**
-   Arguments and conflicts are represented as `AAF = <Ar, R>`, then resolved with grounded semantics.
-
-5. **Evaluation and Auditability**
-   Future evaluation will use MIMIC-IV and MIMIC-IV-Ext-ITR open-ended questions, measuring clinical correctness, grounding, safety, reasoning quality, and auditability.
+```text
+ICD10CM, SNOMEDCT_US, RXNORM, ATC, CPT, HCPCS, LNC, MEDCIN, MSH
+```
 
 ## Repository Layout
 
 - `ingest/`: normalized loading for MIMIC-IV notes.
 - `retrieval/`: concept normalization, LlamaIndex indexing, query helpers, and graph visualization.
 - `argumentation/`: agents, schemes, critical questions, and AAF semantics.
-- `eval/`: MedQA smoke test, MIMIC-IV-Ext-ITR placeholder, metrics, rubrics, and record-pulling tools.
+- `eval/`: MedQA checks, MIMIC-IV-Ext-ITR evaluation code, metrics, rubrics, and record-pulling tools.
 - `helpers/`: shared environment validation, JSONL logging, and record utilities.
 - `api/`: local read-only API for events, evaluation records, and recommendation traces.
-- `prompts/`: prompt templates kept for reference and future extractor experiments.
 
 ## Setup
 
-Install dependencies:
+Use a standard Python environment:
 
 ```bash
 pip install -r requirements.txt
-```
-
-Copy and edit the environment template:
-
-```bash
 cp .env.example .env
 ```
 
-The cleaned env file is organized into:
-
-- Ollama model names and endpoint
-- LlamaIndex storage/indexing
-- smoke/evaluation controls
-- UMLS configuration
-
-By default, indexing points to an extracted MIMIC discharge-note subset:
+Main runtime paths:
 
 ```text
 INPUT_BASE_DIR=data/evidence/mimic_discharge_subset
 OUTPUT_BASE_DIR=output
 ```
 
-Place extracted MIMIC note `.txt` files in that input folder. The folder is ignored by git because it may contain licensed clinical material.
+This repository uses credentialed MIMIC data. The main expected sources are:
 
-Create the note subset explicitly before building the index:
+- `MIMIC-IV-Note`: request access through PhysioNet, complete the required credentialed-access course/training, and download the note release after approval. This repo expects the discharge-note CSV at `data/mimic_iv_note/discharge.csv`.
+- `MIMIC-IV-Ext Clinical Decision Support for Referral, Triage, and Diagnosis`: request the dataset from PhysioNet under credentialed access, complete the required course/training, and download the approved release. This repo defaults to `data/mimic-iv-ext-clinical-decision-support-for-referral-triage-and-diagnosis-1.0.2/` and expects files such as `initial_assessment_info.csv` and `clinical_data.csv.zip` inside that directory.
 
-```bash
-python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000
-```
-
-For medical indexing, keep `UMLS_ENABLED=true`. That makes the build path run the UMLS prepass before graph construction, even when schema-guided extraction is off.
-
-If you want the index build to use a different model from the argumentation agents, set `INDEX_LLM_MODEL` and `INDEX_EMBEDDING_MODEL`.
-
-The repo is now Ollama-only. The current experiment sweeps are:
-
-```text
-generation_model_sweep = ["gemma4", "qwen3.5:9b", "medgemma1.5"]
-embedding_model_sweep = ["qwen3-embedding:0.6b", "embeddinggemma:latest", "all-minilm:latest"]
-```
-
-For UMLS lookup:
+Baseline UMLS settings:
 
 ```bash
 UMLS_ENABLED=true
 UMLS_API_KEY=<your-umls-api-key>
 ```
 
-## Common Commands
-
-Run the current smoke test:
+This repository is Ollama-only. If command-line `tqdm` bars do not appear during index builds, force them with:
 
 ```bash
-python main.py
+SHOW_PROGRESS=true
 ```
 
-Run the explicit smoke-eval subcommand:
+## Quick Start
 
-```bash
-python main.py smoke-eval
-```
-
-Build the LlamaIndex property graph explicitly:
-
-```bash
-python make_index.py build
-```
-
-Build the schema-guided graph with UMLS-based entity normalization and relation hints:
-
-```bash
-python make_index.py build-schema
-```
-
-Set `INDEX_SCHEMA_GUIDED=true` to make the smoke test and API/index helpers use the same mode by default.
-For Ollama-backed builds, `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, and `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK` control how aggressively the schema extractor calls the model. If you see `ReadTimeout` on large chapters, raise the timeout first and keep workers low.
-
-If you want the safer baseline for notebook work or large note subsets, keep schema-guided extraction off and rely on the UMLS-first graph build:
-
-```text
-UMLS_ENABLED=true
-INDEX_SCHEMA_GUIDED=false
-```
-
-That still focuses the graph on medical entities and relationships, but avoids the slowest extractor path.
-
-Extract a small MIMIC discharge subset into the input folder:
+### Prepare Evidence
 
 ```bash
 python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000
 ```
 
-Look up UMLS concepts:
+or:
 
 ```bash
-python -m retrieval.concepts.lookup "heart failure" metformin "renal replacement therapy"
+python make_index.py extract-mimic-ext-cardiovascular --dataset-dir data/mimic-iv-ext-clinical-decision-support-for-referral-triage-and-diagnosis-1.0.2 --limit 100 --max-chars 4000
 ```
 
-Run the offline vocabulary smoke test:
+Create a matched domain subset of discharge notes and MedQA questions:
 
 ```bash
-python -m retrieval.concepts.smoke_test
+python make_domain_subset.py \
+  --domain renal_metabolic \
+  --notes-csv-path data/mimic_iv_note/discharge.csv \
+  --notes-output-dir data/evidence/renal_metabolic_discharge_subset \
+  --questions-output-path data/eval/renal_metabolic_medqa.jsonl \
+  --note-limit all \
+  --question-limit all
 ```
 
-Run the end-to-end pipeline check:
+This command uses UMLS matching by default and requires `UMLS_API_KEY`. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain. Use `--matcher keyword` to fall back to term-based matching.
+
+### Build the Knowledge Graph
+
+UMLS-first graph:
+
+```text
+UMLS_ENABLED=true
+```
+
+Command:
+
+```bash
+python make_index.py build
+```
+
+UMLS + schema-guided graph:
+
+```text
+UMLS_ENABLED=true
+```
+
+Command:
+
+```bash
+python make_index.py build-schema
+```
+
+Use `build` for the UMLS-first graph and `build-schema` for the UMLS + schema-guided graph. Use `INDEX_SCHEMA_GUIDED` only when other entrypoints should default to schema-guided behavior.
+
+Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
+
+### Run Retrieval Workflows
+
+To run retrieval or benchmarks on a domain subset, point `INPUT_BASE_DIR` at the subset folder and use the matching question file where applicable.
+
+Pipeline check:
 
 ```bash
 python main.py pipeline-check \
@@ -164,7 +144,7 @@ python main.py pipeline-check \
   --dry-run
 ```
 
-Benchmark embedding models against the same note subset and question sample:
+Embedding benchmark:
 
 ```bash
 python main.py benchmark-embeddings \
@@ -175,7 +155,7 @@ python main.py benchmark-embeddings \
   --sample-size 5
 ```
 
-Benchmark generation models while holding the embedding fixed:
+Generation benchmark:
 
 ```bash
 python main.py benchmark-models \
@@ -186,11 +166,30 @@ python main.py benchmark-models \
   --sample-size 5
 ```
 
-Start the local API through the unified entrypoint:
+API entrypoint:
 
 ```bash
 python main.py serve-api --reload
 ```
+
+### Introduce Argumentation Frameworks
+
+The graph is the evidence layer. The argumentation layer turns that evidence into explicit support and attack structures:
+
+1. retrieve grounded evidence
+2. generate candidate recommendations and objections
+3. instantiate schemes and critical questions
+4. build `AAF = <Ar, R>`
+5. resolve attacks under grounded semantics
+
+Main code:
+
+- `argumentation/agents.py`
+- `argumentation/schemes.py`
+- `argumentation/critical_questions.py`
+- `argumentation/aaf.py`
+
+Background notes: [docs/framework_comparison.md](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/docs/framework_comparison.md:1)
 
 ## Logs and Records
 
@@ -199,18 +198,16 @@ LlamaIndex writes its own internal index files under the configured output direc
 - `output/logs/framework/events.jsonl`: step-level events, durations, failures, and previews.
 - `output/logs/framework/eval_records.jsonl`: one pullable record per evaluated question.
 
-Pull records from the command line:
+Inspect records from the command line with:
 
 ```bash
 python -m eval.pull_records --run-id medqa_smoke
 python -m eval.pull_records --limit 5
 ```
 
-These records are intended to support later analysis of what worked, what failed, and why.
+## API
 
-## Results API
-
-Start the local read-only API:
+Start the local read-only API with:
 
 ```bash
 uvicorn api.app:app --reload
@@ -227,13 +224,13 @@ Useful endpoints:
 - `GET /eval-records?run_id=medqa_smoke`
 - `GET /recommendations`
 
-FastAPI docs are available at:
+FastAPI docs:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-Submit a clinical scenario:
+Sample request:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/recommend \
@@ -246,7 +243,7 @@ curl -X POST http://127.0.0.1:8000/recommend \
   }'
 ```
 
-Use `dry_run` to test request logging without model calls:
+For request logging without model calls:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/recommend \
@@ -254,20 +251,12 @@ curl -X POST http://127.0.0.1:8000/recommend \
   -d '{"scenario": "Test clinical scenario for API logging.", "dry_run": true}'
 ```
 
-The API writes recommendation traces into the same JSONL record structure used by evaluation. Historical recommendation records can be inspected through `/recommendations`.
-
 ## Notebook Guidance
 
-Use these notebooks for model selection and integration checks:
+Main notebooks:
 
-- `ollama_test.ipynb`: full generation x embedding sweep on the Ollama-backed property-graph workflow.
-- `ollama_embedding_benchmark.ipynb`: fixed generation model, compare embedding models.
-- `ollama_model_benchmark.ipynb`: fixed embedding model, compare generation models.
 - `ollama_connection_model_access_test.ipynb`: reachability plus minimal per-model access checks against a remote Ollama host.
-- `pipeline_check.ipynb`: end-to-end index plus recommendation smoke test.
-
-## Notes
-
-- Do not treat MedQA exact match as the final evaluation metric. It is only a smoke-test signal.
-- Do not index all MIMIC-IV notes blindly. Filter and normalize first, then build evidence and patient-specific retrieval layers deliberately.
-- Keep UMLS/MEDCIN as a preprocessing and normalization layer. LlamaIndex should consume enriched text/metadata rather than replacing clinical concept extraction.
+- `ollama_test.ipynb`: full-flow Ollama-backed property-graph test across generation and embedding combinations.
+- `ollama_benchmarks.ipynb`: combined embedding benchmark plus generation benchmark, reusing the shared embedding index cache between sections.
+- `umls_schema_comparison.ipynb`: comparison notebook for UMLS-first versus schema-guided graph construction and retrieval behavior.
+- `pipeline_check.ipynb`: end-to-end index and recommendation workflow check.

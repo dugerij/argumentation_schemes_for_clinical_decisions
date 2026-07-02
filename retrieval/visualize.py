@@ -55,6 +55,9 @@ GENERIC_ENTITY_TITLES = {
     "Interventional procedure",
 }
 
+ENTITY_COLUMNS = ("title", "type", "description", "frequency", "degree")
+RELATIONSHIP_COLUMNS = ("source", "target", "description", "weight", "combined_degree")
+
 
 def _as_type_set(entity_types: Iterable[str] | None) -> set[str]:
     if entity_types is None:
@@ -139,6 +142,14 @@ def _legend_html(type_counts: dict[str, int], node_count: int, edge_count: int) 
 """
 
 
+def _ensure_graph_table_columns(frame: pd.DataFrame, columns: Iterable[str]) -> pd.DataFrame:
+    normalized = frame.copy()
+    for column in columns:
+        if column not in normalized.columns:
+            normalized[column] = pd.Series(dtype="object")
+    return normalized.loc[:, list(columns)]
+
+
 def _load_parquet_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     entities_path = output_dir / "entities.parquet"
     relationships_path = output_dir / "relationships.parquet"
@@ -151,8 +162,8 @@ def _load_parquet_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             "use source='auto' or source='property_store' to visualize it."
         )
 
-    entities = pd.read_parquet(entities_path).copy()
-    relationships = pd.read_parquet(relationships_path).copy()
+    entities = _ensure_graph_table_columns(pd.read_parquet(entities_path), ENTITY_COLUMNS)
+    relationships = _ensure_graph_table_columns(pd.read_parquet(relationships_path), RELATIONSHIP_COLUMNS)
     return entities, relationships
 
 
@@ -224,10 +235,8 @@ def _load_property_store_hint_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.
         target_degree = int(entity_records[str(edge["target"])]["degree"])
         edge["combined_degree"] = source_degree + target_degree
 
-    entities = pd.DataFrame(entity_records.values())
-    relationships = pd.DataFrame(edge_records.values())
-    if relationships.empty:
-        relationships = pd.DataFrame(columns=["source", "target", "description", "weight", "combined_degree"])
+    entities = _ensure_graph_table_columns(pd.DataFrame(entity_records.values()), ENTITY_COLUMNS)
+    relationships = _ensure_graph_table_columns(pd.DataFrame(edge_records.values()), RELATIONSHIP_COLUMNS)
     return entities, relationships
 
 
@@ -256,8 +265,17 @@ def _select_graph_subset(
     allowed_types = _as_type_set(entity_types)
 
     entities, relationships = _load_graph_tables(output_dir, source=source)
+    entities = _ensure_graph_table_columns(entities, ENTITY_COLUMNS)
+    relationships = _ensure_graph_table_columns(relationships, RELATIONSHIP_COLUMNS)
+
     entities["type"] = entities["type"].fillna("UNKNOWN").astype(str).str.upper()
-    entities["title"] = entities["title"].astype(str)
+    entities["title"] = entities["title"].fillna("").astype(str)
+    entities["degree"] = pd.to_numeric(entities["degree"], errors="coerce").fillna(0)
+    entities["frequency"] = pd.to_numeric(entities["frequency"], errors="coerce").fillna(0)
+    relationships["source"] = relationships["source"].fillna("").astype(str)
+    relationships["target"] = relationships["target"].fillna("").astype(str)
+    relationships["weight"] = pd.to_numeric(relationships["weight"], errors="coerce").fillna(0.0)
+    relationships["combined_degree"] = pd.to_numeric(relationships["combined_degree"], errors="coerce").fillna(0)
 
     keep = entities[entities["type"].isin(allowed_types)].copy()
     keep = keep.sort_values(

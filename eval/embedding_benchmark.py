@@ -12,13 +12,14 @@ from typing import Any
 from dotenv import load_dotenv
 
 from eval.medqa_smoke import extract_answer, format_options, load_questions
+from eval.question_subset import filter_questions_by_note_overlap, load_questions_jsonl
 from helpers.config import env_bool, parse_optional_int, startup_check
 from helpers.jsonl import JsonlLogger
 from helpers.paths import EMBEDDING_BENCHMARK_LOG_PATH
 from helpers.progress import iter_progress, progress_message
 from ingest.mimic import MimicDischargeSubsetConfig, extract_mimic_discharge_subset
 from retrieval.index import ensure_index
-from retrieval.query import query_index_context
+from retrieval.query import query_index_with_diagnostics
 
 
 DEFAULT_EVENT_LOG = EMBEDDING_BENCHMARK_LOG_PATH
@@ -35,6 +36,7 @@ class EmbeddingBenchmarkConfig:
     output_root: Path
     generation_model: str
     embedding_models: tuple[str, ...]
+    index_root: Path | None = None
     use_umls: bool = False
     schema_guided: bool = False
     note_limit: int | None = 25
@@ -44,6 +46,8 @@ class EmbeddingBenchmarkConfig:
     questions_path: Path | None = None
     sample_size: int = 5
     render_graphs: bool = False
+    require_question_note_overlap: bool = True
+    min_overlap_terms: int = 2
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,12 @@ class EmbeddingBenchmarkResult:
     total_query_seconds: float
     mean_query_seconds: float
     exact_match: float | None
+    mean_top_retrieval_score: float | None
+    mean_retrieval_score: float | None
+    mean_retrieval_score_margin: float | None
+    mean_top_cosine_similarity: float | None
+    mean_cosine_similarity: float | None
+    mean_cosine_similarity_margin: float | None
     use_umls: bool
     schema_guided: bool
     generation_model: str
@@ -91,6 +101,12 @@ def load_benchmark_questions(path: Path | None, sample_size: int) -> list[dict[s
             for index in range(1, sample_size + 1)
         ]
     return load_questions(path, sample_size=sample_size)
+
+
+def load_all_questions(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return load_benchmark_questions(path, sample_size=100)
+    return load_questions_jsonl(path)
 
 
 def prepare_mimic_subset(
@@ -132,7 +148,25 @@ async def run_embedding_benchmark(
         note_type=config.note_type,
     )
     questions_path = discover_questions_path(config.questions_path)
-    questions = load_benchmark_questions(questions_path, sample_size=config.sample_size)
+    raw_questions = (
+        load_all_questions(questions_path)
+        if config.require_question_note_overlap
+        else load_benchmark_questions(questions_path, sample_size=config.sample_size)
+    )
+    if config.require_question_note_overlap:
+        questions, question_overlap_details = filter_questions_by_note_overlap(
+            questions=raw_questions,
+            input_dir=config.input_dir,
+            max_questions=config.sample_size,
+            min_overlap_terms=config.min_overlap_terms,
+        )
+        if not questions:
+            raise ValueError(
+                f"No benchmark questions overlapped with notes in {config.input_dir} using min_overlap_terms={config.min_overlap_terms}."
+            )
+    else:
+        questions = raw_questions[: config.sample_size]
+        question_overlap_details = []
 
     logger.event(
         "embedding_benchmark",
@@ -143,10 +177,20 @@ async def run_embedding_benchmark(
         use_umls=config.use_umls,
         schema_guided=config.schema_guided,
         question_count=len(questions),
+        raw_question_count=len(raw_questions),
         input_dir=config.input_dir,
         output_root=config.output_root,
         questions_path=questions_path,
+        require_question_note_overlap=config.require_question_note_overlap,
+        min_overlap_terms=config.min_overlap_terms,
     )
+    if question_overlap_details:
+        overlap_path = config.output_root / "selected_questions.json"
+        overlap_path.write_text(
+            json.dumps(question_overlap_details, indent=2),
+            encoding="utf-8",
+        )
+        logger.event("question_filter", "completed", selected_count=len(questions), summary_path=overlap_path)
 
     os.environ["INDEX_LLM_PROVIDER"] = "ollama"
     os.environ["INDEX_EMBEDDING_PROVIDER"] = "ollama"
@@ -156,6 +200,8 @@ async def run_embedding_benchmark(
     progress_message(
         f"Running embedding benchmark for {len(config.embedding_models)} embedding model(s) over {len(questions)} question(s)"
     )
+    index_root = config.index_root or config.output_root
+    index_root.mkdir(parents=True, exist_ok=True)
     for embedding_model in iter_progress(
         config.embedding_models,
         desc="Embedding models",
@@ -165,7 +211,7 @@ async def run_embedding_benchmark(
         os.environ["INDEX_EMBEDDING_MODEL"] = embedding_model
 
         slug = model_slug(embedding_model)
-        index_dir = config.output_root / slug
+        index_dir = index_root / slug
         logger.event("embedding_model", "started", embedding_model=embedding_model, index_dir=index_dir)
         progress_message(f"Building index for embedding model `{embedding_model}`")
 
@@ -181,6 +227,12 @@ async def run_embedding_benchmark(
 
         exact_matches: list[float] = []
         query_durations: list[float] = []
+        top_retrieval_scores: list[float] = []
+        mean_retrieval_scores: list[float] = []
+        retrieval_score_margins: list[float] = []
+        top_cosine_similarities: list[float] = []
+        mean_cosine_similarities: list[float] = []
+        cosine_similarity_margins: list[float] = []
         for item in iter_progress(
             questions,
             desc=f"Questions [{embedding_model}]",
@@ -193,8 +245,20 @@ async def run_embedding_benchmark(
                 prompt = f"{prompt}\n\n{format_options(options)}"
 
             query_started = time.perf_counter()
-            response, _context = await query_index_context(index=index, query=prompt)
+            response, _context, diagnostics = await query_index_with_diagnostics(index=index, query=prompt)
             query_durations.append(time.perf_counter() - query_started)
+            if diagnostics.get("top_retrieval_score") is not None:
+                top_retrieval_scores.append(float(diagnostics["top_retrieval_score"]))
+            if diagnostics.get("mean_retrieval_score") is not None:
+                mean_retrieval_scores.append(float(diagnostics["mean_retrieval_score"]))
+            if diagnostics.get("retrieval_score_margin") is not None:
+                retrieval_score_margins.append(float(diagnostics["retrieval_score_margin"]))
+            if diagnostics.get("top_cosine_similarity") is not None:
+                top_cosine_similarities.append(float(diagnostics["top_cosine_similarity"]))
+            if diagnostics.get("mean_cosine_similarity") is not None:
+                mean_cosine_similarities.append(float(diagnostics["mean_cosine_similarity"]))
+            if diagnostics.get("cosine_similarity_margin") is not None:
+                cosine_similarity_margins.append(float(diagnostics["cosine_similarity_margin"]))
 
             if options and item.get("answer"):
                 predicted = extract_answer(response, options)
@@ -211,6 +275,12 @@ async def run_embedding_benchmark(
             total_query_seconds=total_query_seconds,
             mean_query_seconds=mean_query_seconds,
             exact_match=exact_match,
+            mean_top_retrieval_score=round(sum(top_retrieval_scores) / len(top_retrieval_scores), 4) if top_retrieval_scores else None,
+            mean_retrieval_score=round(sum(mean_retrieval_scores) / len(mean_retrieval_scores), 4) if mean_retrieval_scores else None,
+            mean_retrieval_score_margin=round(sum(retrieval_score_margins) / len(retrieval_score_margins), 4) if retrieval_score_margins else None,
+            mean_top_cosine_similarity=round(sum(top_cosine_similarities) / len(top_cosine_similarities), 4) if top_cosine_similarities else None,
+            mean_cosine_similarity=round(sum(mean_cosine_similarities) / len(mean_cosine_similarities), 4) if mean_cosine_similarities else None,
+            mean_cosine_similarity_margin=round(sum(cosine_similarity_margins) / len(cosine_similarity_margins), 4) if cosine_similarity_margins else None,
             use_umls=config.use_umls,
             schema_guided=config.schema_guided,
             provider="ollama",

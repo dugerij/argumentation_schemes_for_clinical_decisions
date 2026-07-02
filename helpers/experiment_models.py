@@ -1,7 +1,7 @@
 GENERATION_MODEL_SWEEP = (
-    "gemma4",
+    "gemma4:latest",
     "qwen3.5:9b",
-    "medgemma1.5",
+    "medgemma1.5:latest",
 )
 
 EMBEDDING_MODEL_SWEEP = (

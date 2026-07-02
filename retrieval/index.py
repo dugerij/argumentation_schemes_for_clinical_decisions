@@ -1,7 +1,9 @@
+import asyncio
 import hashlib
 import json
 import os
 import sqlite3
+import threading
 import time
 import traceback
 from dataclasses import dataclass
@@ -36,6 +38,29 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_SCHEMA_HIT_LIMIT = 120
 INDEX_EVENT_LOG = INDEX_BUILD_LOG_PATH
 DEFAULT_LLM_REQUEST_TIMEOUT = 180.0
+
+
+def _run_coro_blocking(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - surfaced to caller
+            error["exc"] = exc
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
+    return result.get("value")
 
 
 def source_documents(input_dir: Path) -> list[Path]:
@@ -250,6 +275,7 @@ def metadata_for_sources(
     input_dir: Path,
     documents: list[Path],
     schema_guided: bool,
+    use_umls: bool,
     guidance: ClinicalSchemaGuidance | None = None,
 ) -> dict[str, object]:
     llm_provider = os.environ.get("INDEX_LLM_PROVIDER", os.environ.get("GENERATION_MODEL_PROVIDER", "ollama")).strip().lower()
@@ -272,7 +298,7 @@ def metadata_for_sources(
         "entity_types": list(ENTITY_LABELS),
         "relation_types": list(RELATION_LABELS),
         "schema_guided": schema_guided,
-        "umls_enabled": env_bool("UMLS_ENABLED", False),
+        "umls_enabled": use_umls,
         "umls_concept_count": sum((guidance.concept_count_by_source.get(path.as_posix(), 0) if guidance else 0) for path in documents),
         "candidate_term_count": sum((guidance.candidate_count_by_source.get(path.as_posix(), 0) if guidance else 0) for path in documents),
         "relation_hint_count": guidance.relation_count if guidance else 0,
@@ -280,7 +306,12 @@ def metadata_for_sources(
     }
 
 
-def index_needs_rebuild(output_dir: Path, input_dir: Path, schema_guided: bool) -> tuple[bool, list[str]]:
+def index_needs_rebuild(
+    output_dir: Path,
+    input_dir: Path,
+    schema_guided: bool,
+    use_umls: bool,
+) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     manifest_file = manifest_path(output_dir)
     documents = source_documents(input_dir)
@@ -310,10 +341,14 @@ def index_needs_rebuild(output_dir: Path, input_dir: Path, schema_guided: bool) 
         os.environ.get("RAG_EMBEDDING_MODEL_PROVIDER", "ollama"),
     ).strip().lower()
     current_embedding_model = os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")).strip()
-    if manifest.get("llm_provider") != current_llm_provider or manifest.get("llm_model") != current_llm_model:
+    if schema_guided and (
+        manifest.get("llm_provider") != current_llm_provider or manifest.get("llm_model") != current_llm_model
+    ):
         reasons.append("LLM model changed")
     if manifest.get("embedding_provider") != current_embedding_provider or manifest.get("embedding_model") != current_embedding_model:
         reasons.append("embedding model changed")
+    if bool(manifest.get("umls_enabled", False)) != use_umls:
+        reasons.append("UMLS setting changed")
 
     current_fingerprint = fingerprint_documents(documents, input_dir)
     if manifest.get("source_fingerprint") != current_fingerprint:
@@ -323,11 +358,19 @@ def index_needs_rebuild(output_dir: Path, input_dir: Path, schema_guided: bool) 
 
 
 def _load_existing_index(output_dir: Path):
-    from llama_index.core import StorageContext, load_index_from_storage
+    from llama_index.core import Settings, StorageContext, load_index_from_storage
 
+    llm = build_llm()
+    embed_model = build_embed_model()
+    Settings.llm = llm
+    Settings.embed_model = embed_model
     storage_context = StorageContext.from_defaults(persist_dir=str(output_dir))
     try:
-        index = load_index_from_storage(storage_context)
+        index = load_index_from_storage(
+            storage_context,
+            llm=llm,
+            embed_model=embed_model,
+        )
     except Exception:
         from llama_index.core.indices.property_graph import PropertyGraphIndex
 
@@ -335,10 +378,11 @@ def _load_existing_index(output_dir: Path):
             index = PropertyGraphIndex.from_existing(
                 property_graph_store=storage_context.property_graph_store,
                 vector_store=getattr(storage_context, "vector_store", None),
-                llm=build_llm(),
-                embed_model=build_embed_model(),
+                llm=llm,
+                embed_model=embed_model,
             )
-        raise
+        else:
+            raise
 
     if hasattr(index, "_use_async"):
         index._use_async = False
@@ -352,13 +396,49 @@ def _create_empty_index(schema_guided: bool, validation_schema: list[tuple[str, 
         PropertyGraphIndex,
         SchemaLLMPathExtractor,
     )
+    from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
+    from llama_index.core.schema import MetadataMode
+
+    class NotebookSafeSchemaLLMPathExtractor(SchemaLLMPathExtractor):
+        def __call__(self, nodes, show_progress: bool = False, **kwargs: Any):
+            extracted_nodes = []
+            for node in nodes:
+                text = node.get_content(metadata_mode=MetadataMode.LLM)
+                try:
+                    kg_schema = self.llm.structured_predict(
+                        self.kg_schema_cls,
+                        self.extract_prompt,
+                        text=text,
+                        max_triplets_per_chunk=self.max_triplets_per_chunk,
+                    )
+                    triplets = self._prune_invalid_triplets(kg_schema)
+                except (ValueError, TypeError, AttributeError):
+                    triplets = []
+
+                existing_nodes = node.metadata.pop(KG_NODES_KEY, [])
+                existing_relations = node.metadata.pop(KG_RELATIONS_KEY, [])
+                metadata = node.metadata.copy()
+
+                for subj, rel, obj in triplets:
+                    subj.properties.update(metadata)
+                    obj.properties.update(metadata)
+                    rel.properties.update(metadata)
+                    existing_relations.append(rel)
+                    existing_nodes.append(subj)
+                    existing_nodes.append(obj)
+
+                node.metadata[KG_NODES_KEY] = existing_nodes
+                node.metadata[KG_RELATIONS_KEY] = existing_relations
+                extracted_nodes.append(node)
+
+            return extracted_nodes
 
     llm = build_llm()
     embed_model = build_embed_model()
     if schema_guided:
         schema_num_workers = int(os.environ.get("INDEX_SCHEMA_NUM_WORKERS", "1"))
         schema_triplets = int(os.environ.get("INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK", "6"))
-        kg_extractor = SchemaLLMPathExtractor(
+        kg_extractor = NotebookSafeSchemaLLMPathExtractor(
             llm=llm,
             possible_entities=MedicalEntityType,
             possible_relations=MedicalRelationType,
@@ -422,7 +502,12 @@ def ensure_index(
     output_dir.mkdir(parents=True, exist_ok=True)
     ensure_source_documents(input_dir=input_dir)
 
-    needs_rebuild, reasons = index_needs_rebuild(output_dir, input_dir, schema_guided=schema_guided)
+    needs_rebuild, reasons = index_needs_rebuild(
+        output_dir,
+        input_dir,
+        schema_guided=schema_guided,
+        use_umls=use_umls,
+    )
     if not needs_rebuild:
         progress_message(f"Using existing LlamaIndex property graph in {output_dir}")
         event_logger.event("index_build", "completed", reused_existing_index=True, output_dir=output_dir)
@@ -460,7 +545,16 @@ def ensure_index(
     if not pending:
         index.storage_context.persist(persist_dir=str(output_dir))
         manifest_path(output_dir).write_text(
-            json.dumps(metadata_for_sources(input_dir, documents, schema_guided=schema_guided, guidance=guidance), indent=2),
+            json.dumps(
+                metadata_for_sources(
+                    input_dir,
+                    documents,
+                    schema_guided=schema_guided,
+                    use_umls=use_umls,
+                    guidance=guidance,
+                ),
+                indent=2,
+            ),
             encoding="utf-8",
         )
         return index
@@ -577,7 +671,16 @@ def ensure_index(
 
             index.storage_context.persist(persist_dir=str(output_dir))
             manifest_path(output_dir).write_text(
-                json.dumps(metadata_for_sources(input_dir, documents, schema_guided=schema_guided, guidance=guidance), indent=2),
+                json.dumps(
+                    metadata_for_sources(
+                        input_dir,
+                        documents,
+                        schema_guided=schema_guided,
+                        use_umls=use_umls,
+                        guidance=guidance,
+                    ),
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
             event_logger.event(

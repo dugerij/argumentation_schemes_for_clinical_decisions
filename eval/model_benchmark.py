@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 
 from eval.embedding_benchmark import (
     discover_questions_path,
+    filter_questions_by_note_overlap,
+    load_all_questions,
     load_benchmark_questions,
     model_slug,
     prepare_mimic_subset,
@@ -35,6 +37,7 @@ class ModelBenchmarkConfig:
     output_root: Path
     generation_models: tuple[str, ...]
     embedding_model: str
+    index_root: Path | None = None
     use_umls: bool = False
     schema_guided: bool = False
     note_limit: int | None = 25
@@ -43,6 +46,8 @@ class ModelBenchmarkConfig:
     mimic_csv: Path | None = None
     questions_path: Path | None = None
     sample_size: int = 5
+    require_question_note_overlap: bool = True
+    min_overlap_terms: int = 2
 
 
 @dataclass(frozen=True)
@@ -77,7 +82,25 @@ async def run_model_benchmark(
         note_type=config.note_type,
     )
     questions_path = discover_questions_path(config.questions_path)
-    questions = load_benchmark_questions(questions_path, sample_size=config.sample_size)
+    raw_questions = (
+        load_all_questions(questions_path)
+        if config.require_question_note_overlap
+        else load_benchmark_questions(questions_path, sample_size=config.sample_size)
+    )
+    if config.require_question_note_overlap:
+        questions, question_overlap_details = filter_questions_by_note_overlap(
+            questions=raw_questions,
+            input_dir=config.input_dir,
+            max_questions=config.sample_size,
+            min_overlap_terms=config.min_overlap_terms,
+        )
+        if not questions:
+            raise ValueError(
+                f"No benchmark questions overlapped with notes in {config.input_dir} using min_overlap_terms={config.min_overlap_terms}."
+            )
+    else:
+        questions = raw_questions[: config.sample_size]
+        question_overlap_details = []
 
     logger.event(
         "model_benchmark",
@@ -88,14 +111,40 @@ async def run_model_benchmark(
         use_umls=config.use_umls,
         schema_guided=config.schema_guided,
         question_count=len(questions),
+        raw_question_count=len(raw_questions),
         input_dir=config.input_dir,
         output_root=config.output_root,
         questions_path=questions_path,
+        require_question_note_overlap=config.require_question_note_overlap,
+        min_overlap_terms=config.min_overlap_terms,
     )
+    if question_overlap_details:
+        overlap_path = config.output_root / "selected_questions.json"
+        overlap_path.write_text(
+            json.dumps(question_overlap_details, indent=2),
+            encoding="utf-8",
+        )
+        logger.event("question_filter", "completed", selected_count=len(questions), summary_path=overlap_path)
 
     os.environ["INDEX_LLM_PROVIDER"] = "ollama"
     os.environ["INDEX_EMBEDDING_PROVIDER"] = "ollama"
     os.environ["INDEX_EMBEDDING_MODEL"] = config.embedding_model
+
+    index_root = config.index_root or config.output_root
+    index_root.mkdir(parents=True, exist_ok=True)
+    shared_index = None
+    shared_index_dir = index_root / model_slug(config.embedding_model)
+    shared_build_seconds = 0.0
+    if not config.schema_guided:
+        build_started = time.perf_counter()
+        shared_index = await asyncio.to_thread(
+            ensure_index,
+            input_dir=config.input_dir,
+            output_dir=shared_index_dir,
+            use_umls=config.use_umls,
+            schema_guided=config.schema_guided,
+        )
+        shared_build_seconds = round(time.perf_counter() - build_started, 2)
 
     results: list[ModelBenchmarkResult] = []
     progress_message(
@@ -109,20 +158,25 @@ async def run_model_benchmark(
     ):
         os.environ["INDEX_LLM_MODEL"] = generation_model
 
-        slug = model_slug(generation_model)
-        index_dir = config.output_root / slug
+        build_seconds = shared_build_seconds
+        if config.schema_guided:
+            index_dir = index_root / model_slug(generation_model)
+            progress_message(f"Building index for generation model `{generation_model}`")
+            build_started = time.perf_counter()
+            index = await asyncio.to_thread(
+                ensure_index,
+                input_dir=config.input_dir,
+                output_dir=index_dir,
+                use_umls=config.use_umls,
+                schema_guided=config.schema_guided,
+            )
+            build_seconds = round(time.perf_counter() - build_started, 2)
+        else:
+            index_dir = shared_index_dir
+            index = shared_index
         logger.event("generation_model", "started", generation_model=generation_model, index_dir=index_dir)
-        progress_message(f"Building index for generation model `{generation_model}`")
-
-        build_started = time.perf_counter()
-        index = await asyncio.to_thread(
-            ensure_index,
-            input_dir=config.input_dir,
-            output_dir=index_dir,
-            use_umls=config.use_umls,
-            schema_guided=config.schema_guided,
-        )
-        build_seconds = round(time.perf_counter() - build_started, 2)
+        if not config.schema_guided:
+            progress_message(f"Querying shared index with generation model `{generation_model}`")
 
         exact_matches: list[float] = []
         query_durations: list[float] = []
