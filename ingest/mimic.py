@@ -178,7 +178,7 @@ def extract_mimic_discharge_subset(config: MimicDischargeSubsetConfig) -> list[P
         f"Extracting MIMIC discharge notes from {config.csv_path} into {config.output_dir}"
     )
 
-    for row in iter_progress(rows, desc="MIMIC notes", unit="row"):
+    for row in iter_progress(rows, desc="MIMIC notes", unit="note"):
         if config.note_type and _normalize(row.get("note_type")).upper() != config.note_type.upper():
             continue
 
@@ -233,7 +233,7 @@ def extract_mimic_discharge_domain_subset(
         f"Extracting {domain} MIMIC discharge notes from {config.csv_path} into {config.output_dir}"
     )
 
-    for row in iter_progress(rows, desc=f"{domain} MIMIC notes", unit="row"):
+    for row in iter_progress(rows, desc=f"{domain} MIMIC notes", unit="note"):
         if config.note_type and _normalize(row.get("note_type")).upper() != config.note_type.upper():
             continue
 

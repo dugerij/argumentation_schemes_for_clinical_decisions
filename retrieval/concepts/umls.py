@@ -60,6 +60,7 @@ class UMLSClient:
         self.config = config
         self._search_cache: dict[tuple[str, tuple[str, ...] | None, int | None, str], list[UMLSConcept]] = {}
         self._best_match_cache: dict[tuple[str, tuple[str, ...] | None], UMLSConcept | None] = {}
+        self.failed_request_count = 0
 
     def search(
         self,
@@ -140,6 +141,7 @@ class UMLSClient:
 
             self._sleep_before_retry(attempt, response)
 
+        self.failed_request_count += 1
         logger.warning("UMLS lookup failed after %s attempts: %s", attempts, last_error)
         return None
 

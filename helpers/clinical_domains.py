@@ -36,7 +36,6 @@ DOMAIN_TERMS: dict[str, tuple[str, ...]] = {
         "esrd",
         "dialysis",
         "hemodialysis",
-        "peritoneal",
         "creatinine",
         "bun",
         "uremia",
@@ -46,11 +45,6 @@ DOMAIN_TERMS: dict[str, tuple[str, ...]] = {
         "hypernatremia",
         "acidosis",
         "alkalosis",
-        "electrolyte",
-        "metabolic",
-        "diabetic",
-        "diabetes",
-        "insulin",
     ),
 }
 

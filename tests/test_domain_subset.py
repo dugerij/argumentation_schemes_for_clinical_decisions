@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from eval.question_subset import filter_questions_for_domain_and_notes
-from helpers.clinical_domains import HybridDomainMatcher
+from helpers.clinical_domains import HybridDomainMatcher, domain_hit_terms
 from ingest.mimic import MimicDischargeDomainSubsetConfig, extract_mimic_discharge_domain_subset
 
 
@@ -124,3 +124,8 @@ def test_hybrid_domain_matcher_skips_umls_when_keyword_prefilter_misses():
     assert misses == (0, [])
     assert hits == (1, ["ckd"])
     assert stub.calls == 1
+
+
+def test_domain_hit_terms_excludes_generic_diabetes_terms_from_renal_metabolic():
+    hits = domain_hit_terms("Type 2 diabetes managed with insulin only.", "renal_metabolic")
+    assert hits == set()

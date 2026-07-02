@@ -101,7 +101,7 @@ python make_domain_subset.py \
 
 This command uses fast keyword matching by default for both notes and questions. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain.
 
-To refine the keyword subset with UMLS after the fast pass:
+To run UMLS refinement on the keyword subset:
 
 ```bash
 python make_domain_subset.py \
@@ -117,9 +117,13 @@ python make_domain_subset.py \
 
 `UMLS_API_KEY` is only required when a UMLS matcher or refinement step is enabled. `--notes-matcher`, `--questions-matcher`, and the two refinement flags let you choose between a fast local pass and a stricter UMLS pass.
 
+The first pass is intentionally strict, and the default `--min-domain-hits` is `2` for note extraction. If a rerun happens after a UMLS outage, the script reuses the existing note subset and continues refinement from saved checkpoints unless `--fresh` is supplied.
+
 ### Build the Knowledge Graph
 
-UMLS-first graph:
+Choose one graph build mode for a given output directory.
+
+Use the UMLS-first graph when you want the standard entity-normalized graph with the faster build path:
 
 ```text
 UMLS_ENABLED=true
@@ -131,7 +135,7 @@ Command:
 python make_index.py build
 ```
 
-UMLS + schema-guided graph:
+Use the UMLS + schema-guided graph when you want the schema extractor added during graph construction:
 
 ```text
 UMLS_ENABLED=true
@@ -143,7 +147,7 @@ Command:
 python make_index.py build-schema
 ```
 
-Use `build` for the UMLS-first graph and `build-schema` for the UMLS + schema-guided graph. Use `INDEX_SCHEMA_GUIDED` only when other entrypoints should default to schema-guided behavior.
+`build` and `build-schema` are alternatives, not a sequence. Use `build` for the UMLS-first graph and `build-schema` for the UMLS + schema-guided graph. Use `INDEX_SCHEMA_GUIDED` only when other entrypoints should default to schema-guided behavior.
 
 Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
 
