@@ -96,3 +96,83 @@ def test_make_domain_subset_main_writes_matching_notes_and_questions(tmp_path):
     manifest = json.loads(questions_output_path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
     assert manifest["note_count"] == 1
     assert manifest["question_count"] == 1
+    assert manifest["notes_matcher"] == "keyword"
+    assert manifest["questions_matcher"] == "keyword"
+
+
+def test_make_domain_subset_can_refine_with_umls(tmp_path):
+    notes_csv = tmp_path / "discharge.csv"
+    questions_path = tmp_path / "questions.jsonl"
+    notes_output_dir = tmp_path / "notes"
+    questions_output_path = tmp_path / "renal_questions.jsonl"
+
+    with notes_csv.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(
+            file,
+            fieldnames=[
+                "note_id",
+                "subject_id",
+                "hadm_id",
+                "note_type",
+                "note_seq",
+                "charttime",
+                "storetime",
+                "text",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "note_id": "n1",
+                "subject_id": "s1",
+                "hadm_id": "h1",
+                "note_type": "DS",
+                "note_seq": 1,
+                "charttime": "",
+                "storetime": "",
+                "text": "Kidney disease note.",
+            }
+        )
+
+    with questions_path.open("w", encoding="utf-8") as file:
+        file.write(json.dumps({"question": "Kidney disease question?", "options": {"A": "Dialysis"}}) + "\n")
+
+    argv = [
+        "make_domain_subset.py",
+        "--notes-csv-path",
+        str(notes_csv),
+        "--notes-output-dir",
+        str(notes_output_dir),
+        "--questions-input-path",
+        str(questions_path),
+        "--questions-output-path",
+        str(questions_output_path),
+        "--domain",
+        "renal_metabolic",
+        "--refine-notes-with-umls",
+        "--refine-questions-with-umls",
+    ]
+
+    class _KeywordMatcher:
+        def match_details(self, text: str):
+            return (1, ["kidney"]) if "kidney" in text.lower() else (0, [])
+
+    class _UMLSMatcher:
+        def match_details(self, text: str):
+            return (1, ["chronic kidney disease"]) if "kidney" in text.lower() else (0, [])
+
+    def _fake_build_domain_matcher(_domain: str, matcher: str, *, prefilter_min_hits: int = 1):
+        del prefilter_min_hits
+        if matcher == "umls":
+            return _UMLSMatcher()
+        return _KeywordMatcher()
+
+    with patch("sys.argv", argv), patch("make_domain_subset.build_domain_matcher", side_effect=_fake_build_domain_matcher):
+        make_domain_subset.main()
+
+    manifest = json.loads(questions_output_path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    selection = json.loads(questions_output_path.with_suffix(".selection.json").read_text(encoding="utf-8"))
+    assert manifest["refine_notes_with_umls"] is True
+    assert manifest["refine_questions_with_umls"] is True
+    assert selection["notes"]["refined_with_umls"] is True
+    assert selection["questions"]["refined_with_umls"] is True

@@ -99,7 +99,23 @@ python make_domain_subset.py \
   --question-limit all
 ```
 
-This command uses a fast keyword prefilter plus UMLS confirmation by default and requires `UMLS_API_KEY`. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain. Use `--matcher umls` for UMLS-only matching or `--matcher keyword` for term-based matching.
+This command uses fast keyword matching by default for both notes and questions. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain.
+
+To refine the keyword subset with UMLS after the fast pass:
+
+```bash
+python make_domain_subset.py \
+  --domain renal_metabolic \
+  --notes-csv-path data/mimic_iv_note/discharge.csv \
+  --notes-output-dir data/evidence/renal_metabolic_discharge_subset \
+  --questions-output-path data/eval/renal_metabolic_medqa.jsonl \
+  --note-limit all \
+  --question-limit all \
+  --refine-notes-with-umls \
+  --refine-questions-with-umls
+```
+
+`UMLS_API_KEY` is only required when a UMLS matcher or refinement step is enabled. `--notes-matcher`, `--questions-matcher`, and the two refinement flags let you choose between a fast local pass and a stricter UMLS pass.
 
 ### Build the Knowledge Graph
 
