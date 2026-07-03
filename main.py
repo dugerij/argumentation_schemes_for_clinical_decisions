@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     benchmark.add_argument("--schema-guided", action="store_true")
     benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
     benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
-    benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
+    benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
 
     model_benchmark = subparsers.add_parser("benchmark-models", help="Benchmark generation models with a fixed embedding model.")
     model_benchmark.add_argument("--generation-model", action="append", dest="generation_models", required=True)
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     model_benchmark.add_argument("--schema-guided", action="store_true")
     model_benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
     model_benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
-    model_benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
+    model_benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
 
     pipeline = subparsers.add_parser("pipeline-check", help="Run an end-to-end pipeline smoke check.")
     pipeline.add_argument("--scenario", required=True)
@@ -125,7 +125,7 @@ def main() -> None:
                     questions_path=(Path(args.questions_path) if args.questions_path else None),
                     sample_size=args.sample_size,
                     note_limit=parse_optional_int(args.note_limit, default=25),
-                    note_max_chars=parse_optional_int(args.note_max_chars, default=3000),
+                    note_max_chars=parse_optional_int(args.note_max_chars, default=None),
                 )
             )
         )
@@ -147,7 +147,7 @@ def main() -> None:
                     questions_path=(Path(args.questions_path) if args.questions_path else None),
                     sample_size=args.sample_size,
                     note_limit=parse_optional_int(args.note_limit, default=25),
-                    note_max_chars=parse_optional_int(args.note_max_chars, default=3000),
+                    note_max_chars=parse_optional_int(args.note_max_chars, default=None),
                 )
             )
         )

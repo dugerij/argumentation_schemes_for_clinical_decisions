@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 
@@ -14,15 +13,44 @@ from eval.question_subset import (
     load_questions_jsonl,
     write_questions_jsonl,
 )
-from helpers.clinical_domains import (
-    HybridDomainMatcher,
-    KeywordDomainMatcher,
-    UMLSDomainMatcher,
-    normalize_domain_name,
-)
 from helpers.config import parse_optional_int
+from helpers.paths import resolve_mimic_discharge_csv
+from helpers.term_matching import KeywordSeedMatcher, UMLSSeedVocabularyMatcher
 from ingest.mimic import MimicDischargeDomainSubsetConfig, extract_mimic_discharge_domain_subset
 from retrieval.concepts.umls import UMLSClient, UMLSConfig
+
+
+DEFAULT_SPECIALTY_SEEDS: dict[str, tuple[str, ...]] = {
+    "renal_metabolic": (
+        "acute kidney injury",
+        "chronic kidney disease",
+        "end stage renal disease",
+        "end-stage renal disease",
+        "renal failure",
+        "kidney failure",
+        "glomerulonephritis",
+        "nephrotic syndrome",
+        "nephritic syndrome",
+        "pyelonephritis",
+        "hyperkalemia",
+        "hypokalemia",
+        "hyponatremia",
+        "hypernatremia",
+        "metabolic acidosis",
+        "metabolic alkalosis",
+        "diabetic ketoacidosis",
+        "uremia",
+        "proteinuria",
+        "albuminuria",
+        "hematuria",
+    ),
+}
+
+
+def normalize_specialty_name(specialty: str) -> str:
+    """Normalize a specialty label into a stable key."""
+
+    return specialty.strip().lower().replace("-", "_")
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,50 +62,49 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--questions-output-path", default="data/eval/renal_metabolic_medqa.jsonl")
     parser.add_argument("--note-limit", default="all", help="Maximum number of matching notes, or 'all'.")
     parser.add_argument("--question-limit", default="all", help="Maximum number of matching questions, or 'all'.")
-    parser.add_argument("--note-max-chars", default="6000", help="Maximum characters per note, or 'all'.")
+    parser.add_argument("--note-max-chars", default="all", help="Maximum characters per note, or 'all'.")
     parser.add_argument("--note-type", default=os.environ.get("MIMIC_DISCHARGE_NOTE_TYPE", "DS"))
-    parser.add_argument("--min-domain-hits", type=int, default=2)
+    parser.add_argument("--min-domain-hits", type=int, default=3)
     parser.add_argument("--min-question-overlap", type=int, default=2)
-    parser.add_argument("--notes-matcher", choices=("hybrid", "umls", "keyword"), default="keyword")
-    parser.add_argument("--questions-matcher", choices=("hybrid", "umls", "keyword"), default="keyword")
-    parser.add_argument("--notes-prefilter-min-hits", type=int, default=2)
-    parser.add_argument("--questions-prefilter-min-hits", type=int, default=1)
-    parser.add_argument("--refine-notes-with-umls", action="store_true")
-    parser.add_argument("--refine-questions-with-umls", action="store_true")
+    parser.add_argument("--notes-matcher", choices=("keyword", "vocab"), default="vocab")
+    parser.add_argument("--questions-matcher", choices=("keyword", "vocab"), default="vocab")
+    parser.add_argument(
+        "--seed-term",
+        action="append",
+        default=[],
+        help="Specialty seed term. Repeat to provide multiple terms. If omitted, built-in seeds are used when available.",
+    )
     parser.add_argument("--fresh", action="store_true", help="Ignore existing subset artifacts and rebuild from scratch.")
     return parser.parse_args()
 
 
-def build_domain_matcher(domain: str, matcher: str, *, prefilter_min_hits: int = 1):
+def resolve_seed_terms(domain: str, configured_seed_terms: list[str]) -> tuple[str, ...]:
+    """Resolve the specialty seed terms used to build the matching vocabulary."""
+
+    cleaned = tuple(term.strip() for term in configured_seed_terms if term and term.strip())
+    if cleaned:
+        return cleaned
+    builtin = DEFAULT_SPECIALTY_SEEDS.get(domain)
+    if builtin:
+        return builtin
+    raise ValueError(
+        f"No built-in seed terms found for specialty '{domain}'. "
+        "Pass one or more --seed-term values."
+    )
+
+
+def build_domain_matcher(domain: str, matcher: str, *, seed_terms: tuple[str, ...]):
+    """Build a domain matcher for note or question filtering.
+
+    `keyword` uses only the provided seed terms. `vocab` expands the seed terms
+    through UMLS once, then filters notes and questions with plain term
+    matching against that generated vocabulary.
+    """
+
     if matcher == "keyword":
-        return KeywordDomainMatcher(domain)
+        return KeywordSeedMatcher(seed_terms)
     client = UMLSClient(UMLSConfig.from_env())
-    umls_matcher = UMLSDomainMatcher(client, domain)
-    if matcher == "umls":
-        return umls_matcher
-    return HybridDomainMatcher(domain, umls_matcher, prefilter_min_hits=prefilter_min_hits)
-
-
-def matcher_failed_request_count(matcher: Any) -> int:
-    if isinstance(matcher, HybridDomainMatcher):
-        return matcher_failed_request_count(matcher.umls_matcher)
-    extractor = getattr(matcher, "extractor", None)
-    client = getattr(extractor, "client", None)
-    failed_request_count = getattr(client, "failed_request_count", None)
-    if isinstance(failed_request_count, int):
-        return failed_request_count
-    return 0
-
-
-def load_checkpoint(path: Path) -> dict[str, dict[str, Any]]:
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def save_checkpoint(path: Path, state: dict[str, dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    return UMLSSeedVocabularyMatcher(client, seed_terms)
 
 
 def existing_subset_notes(output_dir: Path) -> list[Path]:
@@ -88,142 +115,12 @@ def should_resume_notes(output_dir: Path, *, fresh: bool) -> bool:
     return not fresh and output_dir.exists() and any(output_dir.glob("*.txt"))
 
 
-def refine_note_subset_with_matcher(
-    note_paths: list[Path],
-    *,
-    matcher: Any,
-    min_domain_hits: int,
-    checkpoint_path: Path,
-) -> tuple[list[Path], list[dict[str, Any]], int]:
-    state = load_checkpoint(checkpoint_path)
-    kept: list[Path] = []
-    metadata: list[dict[str, Any]] = []
-    pending_count = 0
-
-    for path in note_paths:
-        key = path.name
-        cached = state.get(key)
-        if cached and cached.get("status") in {"included", "excluded"}:
-            metadata.append(cached)
-            if cached["status"] == "included" and path.exists():
-                kept.append(path)
-            elif cached["status"] == "excluded" and path.exists():
-                path.unlink(missing_ok=True)
-            continue
-
-        failures_before = matcher_failed_request_count(matcher)
-        hit_count, matched_terms = matcher.match_details(path.read_text(encoding="utf-8"))
-        failures_after = matcher_failed_request_count(matcher)
-
-        if failures_after > failures_before:
-            row = {
-                "file": key,
-                "status": "pending_retry",
-                "domain_hit_count": None,
-                "matched_terms": [],
-                "included": None,
-            }
-            state[key] = row
-            metadata.append(row)
-            pending_count += 1
-            save_checkpoint(checkpoint_path, state)
-            continue
-
-        included = hit_count >= min_domain_hits
-        row = {
-            "file": key,
-            "status": "included" if included else "excluded",
-            "domain_hit_count": hit_count,
-            "matched_terms": matched_terms[:20],
-            "included": included,
-        }
-        state[key] = row
-        metadata.append(row)
-        if included:
-            kept.append(path)
-        else:
-            path.unlink(missing_ok=True)
-        save_checkpoint(checkpoint_path, state)
-
-    return kept, metadata, pending_count
-
-
-def question_key(item: dict[str, Any]) -> str:
-    return str(item.get("question", "")).strip()
-
-
-def refine_questions_with_matcher(
-    questions: list[dict[str, Any]],
-    *,
-    matcher: Any,
-    limit: int | None,
-    checkpoint_path: Path,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
-    state = load_checkpoint(checkpoint_path)
-    kept: list[tuple[int, dict[str, Any]]] = []
-    metadata: list[dict[str, Any]] = []
-    pending_count = 0
-
-    for item in questions:
-        key = question_key(item)
-        cached = state.get(key)
-        if cached and cached.get("status") in {"included", "excluded"}:
-            metadata.append(cached)
-            if cached["status"] == "included":
-                kept.append((int(cached.get("domain_hit_count") or 0), item))
-            continue
-
-        parts = [str(item.get("question", ""))]
-        options = item.get("options") or {}
-        if isinstance(options, dict):
-            parts.extend(str(value) for value in options.values())
-        phrases = item.get("metamap_phrases") or []
-        if isinstance(phrases, list):
-            parts.extend(str(value) for value in phrases)
-
-        failures_before = matcher_failed_request_count(matcher)
-        hit_count, matched_terms = matcher.match_details("\n".join(parts))
-        failures_after = matcher_failed_request_count(matcher)
-
-        if failures_after > failures_before:
-            row = {
-                "question": item.get("question"),
-                "status": "pending_retry",
-                "domain_hit_count": None,
-                "matched_terms": [],
-                "included": None,
-            }
-            state[key] = row
-            metadata.append(row)
-            pending_count += 1
-            save_checkpoint(checkpoint_path, state)
-            continue
-
-        included = hit_count > 0
-        row = {
-            "question": item.get("question"),
-            "status": "included" if included else "excluded",
-            "domain_hit_count": hit_count,
-            "matched_terms": matched_terms[:20],
-            "included": included,
-        }
-        state[key] = row
-        metadata.append(row)
-        if included:
-            kept.append((hit_count, item))
-        save_checkpoint(checkpoint_path, state)
-
-    kept.sort(key=lambda row: (-row[0], str(row[1].get("question", ""))))
-    selected_rows = kept if limit is None else kept[:limit]
-    return [item for _, item in selected_rows], metadata, pending_count
-
-
 def main() -> None:
     load_dotenv()
     args = parse_args()
 
-    domain = normalize_domain_name(args.domain)
-    notes_csv_path = Path(args.notes_csv_path or os.environ.get("MIMIC_DISCHARGE_CSV", "data/mimic_iv_note/discharge.csv"))
+    domain = normalize_specialty_name(args.domain)
+    notes_csv_path = resolve_mimic_discharge_csv(args.notes_csv_path)
     notes_output_dir = Path(args.notes_output_dir)
     questions_input_path = discover_questions_path(Path(args.questions_input_path) if args.questions_input_path else None)
     if questions_input_path is None:
@@ -232,18 +129,11 @@ def main() -> None:
 
     note_limit = parse_optional_int(args.note_limit, default=None)
     question_limit = parse_optional_int(args.question_limit, default=None)
-    note_max_chars = parse_optional_int(args.note_max_chars, default=6000)
+    note_max_chars = parse_optional_int(args.note_max_chars, default=None)
+    seed_terms = resolve_seed_terms(domain, args.seed_term)
 
-    notes_matcher = build_domain_matcher(
-        domain,
-        args.notes_matcher,
-        prefilter_min_hits=args.notes_prefilter_min_hits,
-    )
-    questions_matcher = build_domain_matcher(
-        domain,
-        args.questions_matcher,
-        prefilter_min_hits=args.questions_prefilter_min_hits,
-    )
+    notes_matcher = build_domain_matcher(domain, args.notes_matcher, seed_terms=seed_terms)
+    questions_matcher = build_domain_matcher(domain, args.questions_matcher, seed_terms=seed_terms)
 
     resumed_notes = should_resume_notes(notes_output_dir, fresh=args.fresh)
     if resumed_notes:
@@ -263,17 +153,6 @@ def main() -> None:
             matcher=notes_matcher,
         )
 
-    note_refinement_metadata: list[dict[str, Any]] = []
-    note_pending_count = 0
-    note_checkpoint_path = notes_output_dir / ".umls_refinement_notes.json"
-    if args.refine_notes_with_umls:
-        written_notes, note_refinement_metadata, note_pending_count = refine_note_subset_with_matcher(
-            written_notes,
-            matcher=build_domain_matcher(domain, "umls"),
-            min_domain_hits=args.min_domain_hits,
-            checkpoint_path=note_checkpoint_path,
-        )
-
     questions = load_questions_jsonl(questions_input_path)
     result = filter_questions_for_domain_and_notes(
         questions=questions,
@@ -285,16 +164,6 @@ def main() -> None:
     )
 
     kept_questions = result.kept_questions
-    question_refinement_metadata: list[dict[str, Any]] = []
-    question_pending_count = 0
-    question_checkpoint_path = questions_output_path.with_suffix(".umls_refinement_questions.json")
-    if args.refine_questions_with_umls:
-        kept_questions, question_refinement_metadata, question_pending_count = refine_questions_with_matcher(
-            kept_questions,
-            matcher=build_domain_matcher(domain, "umls"),
-            limit=question_limit,
-            checkpoint_path=question_checkpoint_path,
-        )
     write_questions_jsonl(questions_output_path, kept_questions)
 
     manifest = {
@@ -305,36 +174,23 @@ def main() -> None:
         "questions_output_path": questions_output_path.as_posix(),
         "note_count": len(written_notes),
         "question_count": len(kept_questions),
+        "seed_terms": list(seed_terms),
         "note_limit": note_limit,
         "question_limit": question_limit,
         "min_domain_hits": args.min_domain_hits,
         "min_question_overlap": args.min_question_overlap,
         "notes_matcher": args.notes_matcher,
         "questions_matcher": args.questions_matcher,
-        "notes_prefilter_min_hits": args.notes_prefilter_min_hits,
-        "questions_prefilter_min_hits": args.questions_prefilter_min_hits,
-        "refine_notes_with_umls": args.refine_notes_with_umls,
-        "refine_questions_with_umls": args.refine_questions_with_umls,
         "resumed_notes_subset": resumed_notes,
-        "note_refinement_pending_count": note_pending_count,
-        "question_refinement_pending_count": question_pending_count,
     }
     questions_output_path.with_suffix(".manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     selection = {
         "notes": {
             "matcher": args.notes_matcher,
-            "refined_with_umls": args.refine_notes_with_umls,
-            "checkpoint_path": note_checkpoint_path.as_posix(),
-            "pending_count": note_pending_count,
-            "refinement_metadata": note_refinement_metadata,
         },
         "questions": {
             "matcher": args.questions_matcher,
-            "refined_with_umls": args.refine_questions_with_umls,
-            "checkpoint_path": question_checkpoint_path.as_posix(),
-            "pending_count": question_pending_count,
             "initial_selection_metadata": result.metadata,
-            "refinement_metadata": question_refinement_metadata,
         },
     }
     questions_output_path.with_suffix(".selection.json").write_text(json.dumps(selection, indent=2), encoding="utf-8")

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from helpers.clinical_domains import DomainMatcher, count_domain_hits, tokenize
+from helpers.term_matching import KeywordSeedMatcher, TermMatcher, tokenize
 
 
 @dataclass(frozen=True)
@@ -90,20 +90,17 @@ def filter_questions_for_domain_and_notes(
     notes_dir: Path,
     min_overlap_terms: int = 2,
     limit: int | None = None,
-    matcher: DomainMatcher | None = None,
+    matcher: TermMatcher | None = None,
 ) -> DomainQuestionSubsetResult:
     note_vocabulary = load_note_vocabulary(notes_dir)
     kept: list[tuple[int, int, dict[str, Any], list[str]]] = []
     metadata: list[dict[str, Any]] = []
+    fallback_matcher = matcher or KeywordSeedMatcher((domain.replace("_", " "),))
 
     for item in questions:
         text = question_text(item)
         overlap = sorted(tokenize(text) & note_vocabulary)
-        if matcher is None:
-            domain_hits = count_domain_hits(text, domain)
-            matched_terms: list[str] = []
-        else:
-            domain_hits, matched_terms = matcher.match_details(text)
+        domain_hits, matched_terms = fallback_matcher.match_details(text)
         included = domain_hits > 0 and len(overlap) >= min_overlap_terms
         metadata.append(
             {

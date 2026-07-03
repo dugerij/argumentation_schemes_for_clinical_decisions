@@ -87,7 +87,7 @@ def assert_source_documents(input_dir: Path) -> None:
     raise FileNotFoundError(
         f"No {SOURCE_FILE_PATTERN} source documents were found in {input_dir}.\n"
         "Populate the evidence folder with extracted clinical notes first. "
-        "You can run `python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv`."
+        "You can run `python make_index.py extract-mimic-discharge --limit 25 --max-chars all`."
     )
 
 

@@ -1,41 +1,25 @@
 # Argumentation Schemes for Clinical Reasoning
 
-Clinical reasoning pipeline built around UMLS-guided knowledge graphs, evidence-grounded retrieval, structured argumentation, and Abstract Argumentation Framework adjudication.
+Clinical reasoning pipeline for diagnosis identification from MIMIC-IV discharge notes.
 
 Supporting documentation:
 
 - [Local Data Sources](docs/data_sources.md)
 - [Argumentation Framework Comparison](docs/framework_comparison.md)
 
-Target data:
+Workflow:
 
-- MIMIC-IV notes after approval
-- UMLS/MEDCIN-normalized clinical concepts
-
-The included MedQA files are lightweight pipeline-check inputs.
-
-## Overview
-
-Main stages:
-
-1. normalize clinical entities with UMLS/MEDCIN
-2. build a LlamaIndex property graph from evidence documents
-3. retrieve grounded passages for downstream reasoning
-4. instantiate argumentation schemes and attacks
-5. resolve conflicts under grounded AAF semantics
-
-Default clinical vocabulary priority:
-
-```text
-ICD10CM, SNOMEDCT_US, RXNORM, ATC, CPT, HCPCS, LNC, MEDCIN, MSH
-```
+1. download `MIMIC-IV-Note`
+2. extract discharge summaries into local `.txt` evidence files
+3. build the index
+4. run retrieval and reasoning
 
 ## Repository Layout
 
 - `ingest/`: normalized loading for MIMIC-IV notes.
 - `retrieval/`: concept normalization, LlamaIndex indexing, query helpers, and graph visualization.
 - `argumentation/`: agents, schemes, critical questions, and AAF semantics.
-- `eval/`: MedQA checks, MIMIC-IV-Ext-ITR evaluation code, metrics, rubrics, and record-pulling tools.
+- `eval/`: MedQA checks, metrics, rubrics, and record-pulling tools.
 - `helpers/`: shared environment validation, JSONL logging, and record utilities.
 - `api/`: local read-only API for events, evaluation records, and recommendation traces.
 
@@ -55,10 +39,23 @@ INPUT_BASE_DIR=data/evidence/mimic_discharge_subset
 OUTPUT_BASE_DIR=output
 ```
 
-This repository uses credentialed MIMIC data. The main expected sources are:
+The required dataset is `MIMIC-IV-Note`. The repo can read either a plain CSV or a gzipped CSV. It checks common local paths automatically, including `data/mimic-iv-note-deidentified-free-text-clinical-notes-2.2/note/discharge.csv.gz`.
 
-- `MIMIC-IV-Note`: request access through PhysioNet, complete the required credentialed-access course/training, and download the note release after approval. This repo expects the discharge-note CSV at `data/mimic_iv_note/discharge.csv`.
-- `MIMIC-IV-Ext Clinical Decision Support for Referral, Triage, and Diagnosis`: request the dataset from PhysioNet under credentialed access, complete the required course/training, and download the approved release. This repo defaults to `data/mimic-iv-ext-clinical-decision-support-for-referral-triage-and-diagnosis-1.0.2/` and expects files such as `initial_assessment_info.csv` and `clinical_data.csv.zip` inside that directory.
+## Download MIMIC-IV-Note
+
+PhysioNet page: `https://physionet.org/content/mimic-iv-note/2.2/`
+
+Download the `discharge` table and place it under `data/`. The repo can read either a plain CSV or the extracted PhysioNet gzip layout. For example:
+
+```text
+data/mimic_iv_note/discharge.csv
+```
+
+or:
+
+```text
+data/mimic-iv-note-deidentified-free-text-clinical-notes-2.2/note/discharge.csv.gz
+```
 
 Baseline UMLS settings:
 
@@ -75,67 +72,55 @@ SHOW_PROGRESS=true
 
 ## Quick Start
 
-### Prepare Evidence
+### 1. Extract Notes
+
+Place the MIMIC-IV-Note discharge file in the repo, or keep the extracted PhysioNet folder as-is, then extract the discharge summaries into plain text evidence files:
 
 ```bash
-python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000
+python make_index.py extract-mimic-discharge --limit 25 --max-chars all
 ```
 
-or:
+### 2. Build The Index
 
 ```bash
-python make_index.py extract-mimic-ext-cardiovascular --dataset-dir data/mimic-iv-ext-clinical-decision-support-for-referral-triage-and-diagnosis-1.0.2 --limit 100 --max-chars 4000
+python make_index.py build
 ```
+
+### 3. Optional Domain Subset
 
 Create a matched domain subset of discharge notes and MedQA questions:
 
 ```bash
 python make_domain_subset.py \
   --domain renal_metabolic \
-  --notes-csv-path data/mimic_iv_note/discharge.csv \
   --notes-output-dir data/evidence/renal_metabolic_discharge_subset \
   --questions-output-path data/eval/renal_metabolic_medqa.jsonl \
   --note-limit all \
   --question-limit all
 ```
 
-This command uses fast keyword matching by default for both notes and questions. It writes all matching notes, all matching questions, and selection metadata for the chosen clinical domain.
+The command uses a vocabulary-first specialty filter. For the default renal workflow, it expands curated renal diagnosis seeds through UMLS once, builds a matching vocabulary from that expansion, and then filters notes and questions with plain term matching.
 
-To run UMLS refinement on the keyword subset:
+`UMLS_API_KEY` is required for the default `vocab` matcher. If you want a fully local fallback, you can switch to `--notes-matcher keyword --questions-matcher keyword`.
+
+The default `--min-domain-hits` is `3`. A diagnosis phrase match contributes extra weight, so a note can be kept either because a nephrology diagnosis is mentioned directly or because it contains several specialty terms.
+
+To adapt the same pipeline to another specialty, provide one or more seed terms:
 
 ```bash
 python make_domain_subset.py \
-  --domain renal_metabolic \
-  --notes-csv-path data/mimic_iv_note/discharge.csv \
-  --notes-output-dir data/evidence/renal_metabolic_discharge_subset \
-  --questions-output-path data/eval/renal_metabolic_medqa.jsonl \
+  --domain neurology \
+  --seed-term stroke \
+  --seed-term seizure\ disorder \
+  --notes-output-dir data/evidence/neurology_discharge_subset \
+  --questions-output-path data/eval/neurology_medqa.jsonl \
   --note-limit all \
-  --question-limit all \
-  --refine-notes-with-umls \
-  --refine-questions-with-umls
+  --question-limit all
 ```
 
-`UMLS_API_KEY` is only required when a UMLS matcher or refinement step is enabled. `--notes-matcher`, `--questions-matcher`, and the two refinement flags let you choose between a fast local pass and a stricter UMLS pass.
+### 4. Optional Schema-Guided Build
 
-The first pass is intentionally strict, and the default `--min-domain-hits` is `2` for note extraction. If a rerun happens after a UMLS outage, the script reuses the existing note subset and continues refinement from saved checkpoints unless `--fresh` is supplied.
-
-### Build the Knowledge Graph
-
-Choose one graph build mode for a given output directory.
-
-Use the UMLS-first graph when you want the standard entity-normalized graph with the faster build path:
-
-```text
-UMLS_ENABLED=true
-```
-
-Command:
-
-```bash
-python make_index.py build
-```
-
-Use the UMLS + schema-guided graph when you want the schema extractor added during graph construction:
+Use the schema-guided graph only if you specifically want that build mode:
 
 ```text
 UMLS_ENABLED=true
@@ -147,7 +132,7 @@ Command:
 python make_index.py build-schema
 ```
 
-`build` and `build-schema` are alternatives, not a sequence. Use `build` for the UMLS-first graph and `build-schema` for the UMLS + schema-guided graph. Use `INDEX_SCHEMA_GUIDED` only when other entrypoints should default to schema-guided behavior.
+`build` and `build-schema` are alternatives, not a sequence.
 
 Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
 

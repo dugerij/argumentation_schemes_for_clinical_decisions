@@ -40,7 +40,7 @@ class EmbeddingBenchmarkConfig:
     use_umls: bool = False
     schema_guided: bool = False
     note_limit: int | None = 25
-    note_max_chars: int | None = 3000
+    note_max_chars: int | None = None
     note_type: str = "DS"
     mimic_csv: Path | None = None
     questions_path: Path | None = None
@@ -314,7 +314,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--schema-guided", action="store_true")
     parser.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
     parser.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
-    parser.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "3000"))
+    parser.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
     parser.add_argument("--note-type", default=os.environ.get("MIMIC_DISCHARGE_NOTE_TYPE", "DS"))
     return parser.parse_args()
 
@@ -333,7 +333,7 @@ def main() -> None:
                 use_umls=args.use_umls,
                 schema_guided=args.schema_guided,
                 note_limit=parse_optional_int(args.note_limit, default=25),
-                note_max_chars=parse_optional_int(args.note_max_chars, default=3000),
+                note_max_chars=parse_optional_int(args.note_max_chars, default=None),
                 note_type=args.note_type,
                 mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),
                 questions_path=(Path(args.questions_path) if args.questions_path else None),

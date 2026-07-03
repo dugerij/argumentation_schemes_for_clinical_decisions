@@ -12,5 +12,6 @@ The `data/` directory is ignored by git. Keep only source code, configuration, a
 
 Recommended workflow:
 
-1. Run `python make_index.py extract-mimic-discharge --csv-path data/mimic_iv_note/discharge.csv --limit 25 --max-chars 6000`.
-2. Run `python make_index.py build`.
+1. Download `MIMIC-IV-Note` from PhysioNet and ensure the discharge-note table is available locally, either as `data/mimic_iv_note/discharge.csv` or in the extracted PhysioNet folder at `data/mimic-iv-note-deidentified-free-text-clinical-notes-2.2/note/discharge.csv.gz`.
+2. Run `python make_index.py extract-mimic-discharge --limit 25 --max-chars all`.
+3. Run `python make_index.py build`.

@@ -51,44 +51,41 @@ def env_optional_int(name: str, default: int | None = None) -> int | None:
     return parse_optional_int(os.environ.get(name), default=default)
 
 
-def startup_check():
-    """"Checks that all required environment variables are set and valid
+def startup_check(*, require_models: bool = True, require_paths: bool = True):
+    """"Checks that required environment variables are set and valid.
     Raises:
         ValueError: If any required environment variable is missing or invalid.
     """
-    required_env_vars = [
-        'INPUT_BASE_DIR',
-        'OUTPUT_BASE_DIR',
-    ]
+    if require_paths:
+        for var in ("INPUT_BASE_DIR", "OUTPUT_BASE_DIR"):
+            if var not in os.environ:
+                raise ValueError(f"Missing required environment variable: {var}")
 
-    for var in required_env_vars:
-        if var not in os.environ:
-            raise ValueError(f"Missing required environment variable: {var}")
+    if require_models:
+        os.environ.setdefault('GENERATION_MODEL_PROVIDER', 'ollama')
+        os.environ.setdefault('VERIFIER_MODEL_PROVIDER', 'ollama')
+        os.environ.setdefault('REASONER_MODEL_PROVIDER', 'ollama')
+        os.environ.setdefault('RAG_EMBEDDING_MODEL_PROVIDER', 'ollama')
+        os.environ.setdefault('GENERATOR_MODEL', DEFAULT_GENERATION_MODEL)
+        os.environ.setdefault('VERIFIER_MODEL', os.environ['GENERATOR_MODEL'])
+        os.environ.setdefault('REASONER_MODEL', os.environ['GENERATOR_MODEL'])
+        os.environ.setdefault('RAG_EMBEDDING_MODEL', DEFAULT_EMBEDDING_MODEL)
 
-    os.environ.setdefault('GENERATION_MODEL_PROVIDER', 'ollama')
-    os.environ.setdefault('VERIFIER_MODEL_PROVIDER', 'ollama')
-    os.environ.setdefault('REASONER_MODEL_PROVIDER', 'ollama')
-    os.environ.setdefault('RAG_EMBEDDING_MODEL_PROVIDER', 'ollama')
-    os.environ.setdefault('GENERATOR_MODEL', DEFAULT_GENERATION_MODEL)
-    os.environ.setdefault('VERIFIER_MODEL', os.environ['GENERATOR_MODEL'])
-    os.environ.setdefault('REASONER_MODEL', os.environ['GENERATOR_MODEL'])
-    os.environ.setdefault('RAG_EMBEDDING_MODEL', DEFAULT_EMBEDDING_MODEL)
+        _require_any('GENERATOR_MODEL', 'GENERATOR_BASE_MODEL')
+        _require_any('VERIFIER_MODEL', 'VERIFIER_BASE_MODEL')
+        _require_any('REASONER_MODEL', 'REASONER_BASE_MODEL')
+        if umls_enabled() and not os.environ.get('UMLS_API_KEY'):
+            raise ValueError("UMLS_API_KEY must be set when UMLS_ENABLED=true.")
 
-    _require_any('GENERATOR_MODEL', 'GENERATOR_BASE_MODEL')
-    _require_any('VERIFIER_MODEL', 'VERIFIER_BASE_MODEL')
-    _require_any('REASONER_MODEL', 'REASONER_BASE_MODEL')
-    if umls_enabled() and not os.environ.get('UMLS_API_KEY'):
-        raise ValueError("UMLS_API_KEY must be set when UMLS_ENABLED=true.")
-
-    provider_vars = (
-        'GENERATION_MODEL_PROVIDER',
-        'VERIFIER_MODEL_PROVIDER',
-        'REASONER_MODEL_PROVIDER',
-        'RAG_EMBEDDING_MODEL_PROVIDER',
-    )
-    for var in provider_vars:
-        if os.environ.get(var, 'ollama').strip().lower() != 'ollama':
-            raise ValueError(f"{var} must be 'ollama'. This repo now supports only Ollama-backed models.")
+        provider_vars = (
+            'GENERATION_MODEL_PROVIDER',
+            'VERIFIER_MODEL_PROVIDER',
+            'REASONER_MODEL_PROVIDER',
+            'RAG_EMBEDDING_MODEL_PROVIDER',
+        )
+        for var in provider_vars:
+            if os.environ.get(var, 'ollama').strip().lower() != 'ollama':
+                raise ValueError(f"{var} must be 'ollama'. This repo now supports only Ollama-backed models.")
 
     print("Startup check passed. All required environment variables are set and valid.")
 
