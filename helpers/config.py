@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 
 from helpers.experiment_models import DEFAULT_EMBEDDING_MODEL, DEFAULT_GENERATION_MODEL
 
@@ -74,8 +75,19 @@ def startup_check(*, require_models: bool = True, require_paths: bool = True):
         _require_any('GENERATOR_MODEL', 'GENERATOR_BASE_MODEL')
         _require_any('VERIFIER_MODEL', 'VERIFIER_BASE_MODEL')
         _require_any('REASONER_MODEL', 'REASONER_BASE_MODEL')
-        if umls_enabled() and not os.environ.get('UMLS_API_KEY'):
-            raise ValueError("UMLS_API_KEY must be set when UMLS_ENABLED=true.")
+        if umls_enabled():
+            umls_backend = os.environ.get("UMLS_BACKEND", "local").strip().lower()
+            if umls_backend == "api" and not os.environ.get('UMLS_API_KEY'):
+                raise ValueError("UMLS_API_KEY must be set when UMLS_ENABLED=true and UMLS_BACKEND=api.")
+            if umls_backend == "local":
+                local_db_path = Path(os.environ.get("UMLS_LOCAL_DB_PATH", "output/cache/umls_local.sqlite3"))
+                if not local_db_path.exists():
+                    raise ValueError(
+                        f"Local UMLS database not found at {local_db_path}. "
+                        "Build it with `python -m retrieval.concepts.local_umls build` or set UMLS_BACKEND=api."
+                    )
+            if umls_backend not in {"api", "local"}:
+                raise ValueError("UMLS_BACKEND must be either 'api' or 'local'.")
 
         provider_vars = (
             'GENERATION_MODEL_PROVIDER',

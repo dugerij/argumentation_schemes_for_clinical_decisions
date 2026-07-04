@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Iterable
 
 from helpers.progress import iter_progress, progress_message
-from helpers.term_matching import KeywordSeedMatcher, TermMatcher
 
 
 @dataclass(frozen=True)
@@ -22,20 +21,6 @@ class MimicDischargeSubsetConfig:
     limit: int | None = 25
     note_type: str | None = "DS"
     max_chars: int | None = None
-    overwrite: bool = True
-
-
-@dataclass(frozen=True)
-class MimicDischargeDomainSubsetConfig:
-    """Configuration for extracting only notes that match a clinical domain."""
-
-    csv_path: Path
-    output_dir: Path
-    domain: str
-    limit: int | None = None
-    note_type: str | None = "DS"
-    max_chars: int | None = None
-    min_domain_hits: int = 1
     overwrite: bool = True
 
 
@@ -164,69 +149,4 @@ def extract_mimic_discharge_subset(config: MimicDischargeSubsetConfig) -> list[P
     }
     (config.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     progress_message(f"Wrote {len(written)} note files to {config.output_dir}")
-    return written
-
-
-def extract_mimic_discharge_domain_subset(
-    config: MimicDischargeDomainSubsetConfig,
-    *,
-    matcher: TermMatcher | None = None,
-) -> list[Path]:
-    """Extract only discharge notes that match a requested clinical domain.
-
-    Domain matching can be keyword-only or use a richer matcher supplied by the
-    caller. Matching metadata is written to the manifest so later steps can see
-    why a note was included.
-    """
-
-    if not config.csv_path.exists():
-        raise FileNotFoundError(f"Missing MIMIC discharge CSV: {config.csv_path}")
-
-    domain = config.domain.strip().lower().replace("-", "_")
-    _prepare_output_dir(config.output_dir, overwrite=config.overwrite)
-    progress_message(f"Extracting {domain} MIMIC discharge notes from {config.csv_path} into {config.output_dir}")
-
-    written: list[Path] = []
-    manifest_rows: list[dict[str, object]] = []
-    rows = _iter_matching_discharge_rows(_rows_from_csv(config.csv_path), note_type=config.note_type)
-    fallback_matcher = matcher or KeywordSeedMatcher((domain.replace("_", " "),))
-    for row in iter_progress(rows, desc=f"{domain} MIMIC notes", unit="note"):
-        text = row.get("text", "") or ""
-        hit_count, matched_terms = fallback_matcher.match_details(text)
-        if hit_count < config.min_domain_hits:
-            continue
-
-        output_path, note_id, subject_id, hadm_id = _write_note_file(
-            row,
-            output_dir=config.output_dir,
-            max_chars=config.max_chars,
-            index=len(written) + 1,
-        )
-        written.append(output_path)
-        manifest_rows.append(
-            {
-                "file": output_path.name,
-                "note_id": note_id,
-                "subject_id": subject_id,
-                "hadm_id": hadm_id,
-                "domain_hit_count": hit_count,
-                "matched_terms": matched_terms[:20],
-            }
-        )
-        if config.limit is not None and len(written) >= config.limit:
-            break
-
-    manifest = {
-        "csv_path": config.csv_path.as_posix(),
-        "output_dir": config.output_dir.as_posix(),
-        "domain": domain,
-        "limit": config.limit,
-        "note_type": config.note_type,
-        "max_chars": config.max_chars,
-        "min_domain_hits": config.min_domain_hits,
-        "document_count": len(written),
-        "files": manifest_rows,
-    }
-    (config.output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    progress_message(f"Wrote {len(written)} {domain} note files to {config.output_dir}")
     return written

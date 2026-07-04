@@ -306,7 +306,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark embedding models for the clinical RAG pipeline.")
     parser.add_argument("--generation-model", required=True, help="LLM used for graph extraction/querying.")
     parser.add_argument("--embedding-model", action="append", dest="embedding_models", required=True)
-    parser.add_argument("--input-dir", default=os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
+    parser.add_argument("--input-dir", default=os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_full"))
     parser.add_argument("--output-root", default="output/embedding_benchmark")
     parser.add_argument("--questions-path", default=None)
     parser.add_argument("--sample-size", type=int, default=5)

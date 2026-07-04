@@ -3,7 +3,7 @@ import json
 
 from dotenv import load_dotenv
 
-from retrieval.concepts.umls import UMLSClient, UMLSConfig
+from retrieval.concepts.umls import UMLSConfig, create_umls_client
 from helpers.jsonl import to_jsonable
 
 
@@ -18,7 +18,7 @@ def main() -> None:
     load_dotenv()
     args = parse_args()
     sources = tuple(item.strip() for item in args.sources.split(",")) if args.sources else None
-    client = UMLSClient(UMLSConfig.from_env())
+    client = create_umls_client(UMLSConfig.from_env())
 
     results = {
         term: client.search(term, source_vocabularies=sources)

@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+from retrieval.concepts.local_umls import DEFAULT_LOCAL_UMLS_DB_PATH, LocalUMLSClient
 from retrieval.concepts.schema import UMLSConcept
 from retrieval.concepts.vocabularies import SOURCE_PRIORITY, category_for
 
@@ -16,19 +17,22 @@ RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 @dataclass(frozen=True)
 class UMLSConfig:
-    api_key: str
+    api_key: str | None = None
     version: str = "current"
     base_url: str = "https://uts-ws.nlm.nih.gov/rest"
     source_vocabularies: tuple[str, ...] = SOURCE_PRIORITY
     page_size: int = 10
     max_retries: int = 3
     retry_backoff_seconds: float = 1.0
+    backend: str = "local"
+    local_db_path: str = str(DEFAULT_LOCAL_UMLS_DB_PATH)
 
     @classmethod
     def from_env(cls) -> "UMLSConfig":
+        backend = os.environ.get("UMLS_BACKEND", "local").strip().lower()
         api_key = os.environ.get("UMLS_API_KEY")
-        if not api_key:
-            raise ValueError("UMLS_API_KEY must be set to use UMLS concept lookup.")
+        if backend == "api" and not api_key:
+            raise ValueError("UMLS_API_KEY must be set when UMLS_BACKEND=api.")
 
         source_vocabularies = parse_source_vocabularies(
             os.environ.get("UMLS_SOURCE_VOCABS", ",".join(SOURCE_PRIORITY))
@@ -42,6 +46,8 @@ class UMLSConfig:
             page_size=int(os.environ.get("UMLS_PAGE_SIZE", "10")),
             max_retries=int(os.environ.get("UMLS_MAX_RETRIES", "3")),
             retry_backoff_seconds=float(os.environ.get("UMLS_RETRY_BACKOFF_SECONDS", "1.0")),
+            backend=backend,
+            local_db_path=os.environ.get("UMLS_LOCAL_DB_PATH", str(DEFAULT_LOCAL_UMLS_DB_PATH)),
         )
 
 
@@ -175,3 +181,14 @@ class UMLSClient:
                 "raw": item,
             },
         )
+
+
+def create_umls_client(config: UMLSConfig) -> UMLSClient | LocalUMLSClient:
+    if config.backend == "local":
+        return LocalUMLSClient(
+            db_path=config.local_db_path,
+            source_vocabularies=config.source_vocabularies,
+        )
+    if config.backend != "api":
+        raise ValueError(f"Unsupported UMLS_BACKEND: {config.backend}")
+    return UMLSClient(config)

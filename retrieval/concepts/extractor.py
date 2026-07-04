@@ -16,7 +16,13 @@ class UMLSConceptExtractor:
     def __init__(self, client: UMLSClient):
         self.client = client
 
-    def extract_from_terms(self, text: str, candidate_terms: Iterable[str]) -> list[ClinicalEntityMention]:
+    def extract_from_terms(
+        self,
+        text: str,
+        candidate_terms: Iterable[str],
+        *,
+        max_mentions: int | None = None,
+    ) -> list[ClinicalEntityMention]:
         mentions: list[ClinicalEntityMention] = []
         seen: set[tuple[str, int, int]] = set()
 
@@ -41,9 +47,11 @@ class UMLSConceptExtractor:
                         category=concept.category if concept else None,
                     )
                 )
+                if max_mentions is not None and len(mentions) >= max_mentions:
+                    return mentions
 
         return mentions
 
-    def extract_from_text(self, text: str, limit: int = 120) -> list[ClinicalEntityMention]:
+    def extract_from_text(self, text: str, limit: int = 120, *, max_mentions: int | None = None) -> list[ClinicalEntityMention]:
         candidate_terms = extract_candidate_terms(text, limit=limit)
-        return self.extract_from_terms(text, candidate_terms)
+        return self.extract_from_terms(text, candidate_terms, max_mentions=max_mentions)

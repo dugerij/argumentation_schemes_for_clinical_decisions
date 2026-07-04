@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ from helpers.config import env_bool, env_int
 from helpers.jsonl import JsonlLogger, new_run_id
 from helpers.ollama import assert_ollama_available, ollama_endpoint
 from helpers.paths import INDEX_BUILD_LOG_PATH
-from helpers.progress import iter_progress, progress_message
+from helpers.progress import iter_progress, progress_enabled, progress_message
 from retrieval.concepts.candidates import extract_candidate_terms
 from retrieval.concepts.extractor import UMLSConceptExtractor
 from retrieval.concepts.medical_schema import (
@@ -27,17 +28,43 @@ from retrieval.concepts.medical_schema import (
     format_concept_hint_block,
     entity_type_for_category,
 )
-from retrieval.concepts.umls import UMLSClient, UMLSConfig
+from retrieval.concepts.umls import UMLSConfig, create_umls_client
 
 
 INDEX_MANIFEST = "index_manifest.json"
 CHECKPOINT_DB = "index_checkpoints.sqlite"
+SCHEMA_GUIDANCE_DB = "schema_guidance.sqlite"
 SOURCE_FILE_PATTERN = "*.txt"
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_SCHEMA_HIT_LIMIT = 120
 INDEX_EVENT_LOG = INDEX_BUILD_LOG_PATH
 DEFAULT_LLM_REQUEST_TIMEOUT = 180.0
+
+
+@dataclass(frozen=True)
+class GraphCounts:
+    total_nodes: int
+    entity_nodes: int
+    chunk_nodes: int
+    relation_count: int
+    triplet_count: int
+
+
+@dataclass(frozen=True)
+class SchemaGuidanceDocResult:
+    path: str
+    source_fingerprint: str
+    source_name: str
+    char_count: int
+    candidate_term_count: int
+    mention_count: int
+    entity_types: tuple[str, ...]
+    hint_block: str
+    duration_seconds: float
+
+
+_SCHEMA_GUIDANCE_WORKER: dict[str, Any] = {}
 
 
 def _run_coro_blocking(coro):
@@ -87,7 +114,7 @@ def assert_source_documents(input_dir: Path) -> None:
     raise FileNotFoundError(
         f"No {SOURCE_FILE_PATTERN} source documents were found in {input_dir}.\n"
         "Populate the evidence folder with extracted clinical notes first. "
-        "You can run `python make_index.py extract-mimic-discharge --limit 25 --max-chars all`."
+        "You can run `python make_index.py extract-mimic-discharge --limit all --max-chars all`."
     )
 
 
@@ -117,6 +144,121 @@ def init_checkpoint_db(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def init_schema_guidance_db(db_path: Path) -> sqlite3.Connection:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_guidance (
+            source_path TEXT PRIMARY KEY,
+            source_fingerprint TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            char_count INTEGER NOT NULL,
+            candidate_term_count INTEGER NOT NULL,
+            mention_count INTEGER NOT NULL,
+            entity_types_json TEXT NOT NULL,
+            hint_block TEXT NOT NULL,
+            duration_seconds REAL NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def load_cached_schema_guidance(
+    conn: sqlite3.Connection,
+    documents: list[Path],
+    input_dir: Path,
+) -> dict[str, SchemaGuidanceDocResult]:
+    cached: dict[str, SchemaGuidanceDocResult] = {}
+    fingerprints = {path.as_posix(): source_file_fingerprint(path, input_dir) for path in documents}
+    if not fingerprints:
+        return cached
+
+    source_paths = list(fingerprints.keys())
+    chunk_size = 900
+    for start in range(0, len(source_paths), chunk_size):
+        chunk = source_paths[start : start + chunk_size]
+        placeholders = ",".join("?" for _ in chunk)
+        rows = conn.execute(
+            f"""
+            SELECT
+                source_path,
+                source_fingerprint,
+                source_name,
+                char_count,
+                candidate_term_count,
+                mention_count,
+                entity_types_json,
+                hint_block,
+                duration_seconds
+            FROM schema_guidance
+            WHERE source_path IN ({placeholders})
+            """,
+            chunk,
+        ).fetchall()
+        for row in rows:
+            if fingerprints.get(row[0]) != row[1]:
+                continue
+            cached[row[0]] = SchemaGuidanceDocResult(
+                path=row[0],
+                source_fingerprint=row[1],
+                source_name=row[2],
+                char_count=row[3],
+                candidate_term_count=row[4],
+                mention_count=row[5],
+                entity_types=tuple(json.loads(row[6])),
+                hint_block=row[7],
+                duration_seconds=row[8],
+            )
+    return cached
+
+
+def upsert_schema_guidance_result(conn: sqlite3.Connection, result: SchemaGuidanceDocResult) -> None:
+    conn.execute(
+        """
+        INSERT INTO schema_guidance(
+            source_path,
+            source_fingerprint,
+            source_name,
+            char_count,
+            candidate_term_count,
+            mention_count,
+            entity_types_json,
+            hint_block,
+            duration_seconds,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_path)
+        DO UPDATE SET source_fingerprint = excluded.source_fingerprint,
+                      source_name = excluded.source_name,
+                      char_count = excluded.char_count,
+                      candidate_term_count = excluded.candidate_term_count,
+                      mention_count = excluded.mention_count,
+                      entity_types_json = excluded.entity_types_json,
+                      hint_block = excluded.hint_block,
+                      duration_seconds = excluded.duration_seconds,
+                      updated_at = excluded.updated_at
+        """,
+        (
+            result.path,
+            result.source_fingerprint,
+            result.source_name,
+            result.char_count,
+            result.candidate_term_count,
+            result.mention_count,
+            json.dumps(list(result.entity_types)),
+            result.hint_block,
+            result.duration_seconds,
+            time.time(),
+        ),
+    )
+    conn.commit()
+
+
 def already_done(conn: sqlite3.Connection, doc_id: str) -> bool:
     row = conn.execute(
         "SELECT status FROM indexed_docs WHERE doc_id = ?",
@@ -141,6 +283,12 @@ def mark_status(conn: sqlite3.Connection, doc_id: str, status: str, error: str |
 
 
 def file_doc_id(path: Path, input_dir: Path) -> str:
+    relative = path.relative_to(input_dir).as_posix()
+    file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(f"{relative}|{file_hash}".encode()).hexdigest()
+
+
+def source_file_fingerprint(path: Path, input_dir: Path) -> str:
     relative = path.relative_to(input_dir).as_posix()
     file_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     return hashlib.sha256(f"{relative}|{file_hash}".encode()).hexdigest()
@@ -173,10 +321,10 @@ def _schema_guided_enabled() -> bool:
     return env_bool("INDEX_SCHEMA_GUIDED", True)
 
 
-def _umls_client() -> UMLSClient | None:
+def _umls_client():
     if not env_bool("UMLS_ENABLED", False):
         return None
-    return UMLSClient(UMLSConfig.from_env())
+    return create_umls_client(UMLSConfig.from_env())
 
 
 def _dedupe_mentions(mentions):
@@ -196,7 +344,93 @@ def _dedupe_mentions(mentions):
     return deduped
 
 
-def build_schema_guidance(documents: list[Path], input_dir: Path) -> ClinicalSchemaGuidance:
+def _graph_counts(index: Any) -> GraphCounts | None:
+    store = getattr(index, "property_graph_store", None)
+    graph = getattr(store, "graph", None)
+    if graph is None:
+        return None
+
+    nodes = list(getattr(graph, "nodes", {}).values())
+    relations = getattr(graph, "relations", {})
+    triplets = getattr(graph, "triplets", set())
+    return GraphCounts(
+        total_nodes=len(nodes),
+        entity_nodes=sum(1 for node in nodes if getattr(node, "label", None) == "entity"),
+        chunk_nodes=sum(1 for node in nodes if getattr(node, "label", None) == "text_chunk"),
+        relation_count=len(relations),
+        triplet_count=len(triplets),
+    )
+
+
+def _format_graph_counts(counts: GraphCounts) -> str:
+    return (
+        f"{counts.total_nodes} nodes "
+        f"({counts.entity_nodes} entities, {counts.chunk_nodes} chunks), "
+        f"{counts.relation_count} relationships, {counts.triplet_count} triplets"
+    )
+
+
+def _format_graph_delta(before: GraphCounts | None, after: GraphCounts | None) -> str:
+    if before is None or after is None:
+        return ""
+
+    return (
+        f" | graph +{after.total_nodes - before.total_nodes} nodes, "
+        f"+{after.relation_count - before.relation_count} relationships "
+        f"(now {_format_graph_counts(after)})"
+    )
+
+
+def _init_schema_guidance_worker() -> None:
+    client = _umls_client()
+    if client is None:
+        raise RuntimeError("UMLS guidance worker could not initialize a client.")
+    _SCHEMA_GUIDANCE_WORKER["extractor"] = UMLSConceptExtractor(client)
+
+
+def _build_schema_guidance_for_document(path: Path, input_dir: Path, limit: int) -> SchemaGuidanceDocResult:
+    extractor: UMLSConceptExtractor | None = _SCHEMA_GUIDANCE_WORKER.get("extractor")
+    if extractor is None:
+        client = _umls_client()
+        if client is None:
+            raise RuntimeError("UMLS guidance is enabled but no UMLS client is configured.")
+        extractor = UMLSConceptExtractor(client)
+        _SCHEMA_GUIDANCE_WORKER["extractor"] = extractor
+
+    started_at = time.perf_counter()
+    text = read_source_file(path)
+    candidate_terms = extract_candidate_terms(text, limit=limit)
+    mentions = _dedupe_mentions(extractor.extract_from_terms(text, candidate_terms, max_mentions=20))
+    entity_types = tuple(
+        sorted(
+            {
+                entity_type_for_category(mention.category or (mention.concept.category if mention.concept else None))
+                for mention in mentions
+                if entity_type_for_category(mention.category or (mention.concept.category if mention.concept else None))
+            }
+        )
+    )
+    hint_block = format_concept_hint_block(mentions, max_mentions=20, max_relations=20)
+    return SchemaGuidanceDocResult(
+        path=path.as_posix(),
+        source_fingerprint=source_file_fingerprint(path, input_dir),
+        source_name=path.name,
+        char_count=len(text),
+        candidate_term_count=len(candidate_terms),
+        mention_count=len(mentions),
+        entity_types=entity_types,
+        hint_block=hint_block,
+        duration_seconds=round(time.perf_counter() - started_at, 2),
+    )
+
+
+def build_schema_guidance(
+    documents: list[Path],
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    event_logger: JsonlLogger | None = None,
+) -> ClinicalSchemaGuidance:
     client = _umls_client()
     if client is None:
         validation_schema = build_validation_schema(set(ENTITY_LABELS))
@@ -208,30 +442,131 @@ def build_schema_guidance(documents: list[Path], input_dir: Path) -> ClinicalSch
             relation_count=len(validation_schema),
         )
 
-    extractor = UMLSConceptExtractor(client)
     hint_by_source: dict[str, str] = {}
     counts_by_source: dict[str, int] = {}
     candidate_counts_by_source: dict[str, int] = {}
     observed_entity_types: set[str] = set()
 
     limit = env_int("UMLS_HINT_LIMIT", DEFAULT_SCHEMA_HIT_LIMIT)
-    for path in documents:
-        text = read_source_file(path)
-        candidate_terms = extract_candidate_terms(text, limit=limit)
-        candidate_counts_by_source[path.as_posix()] = len(candidate_terms)
-        mentions = _dedupe_mentions(extractor.extract_from_terms(text, candidate_terms))
-        counts_by_source[path.as_posix()] = len(mentions)
-        observed_entity_types.update(
-            {
-                entity_type_for_category(mention.category or (mention.concept.category if mention.concept else None))
-                for mention in mentions
-            }
+    total_documents = len(documents)
+    worker_count = max(1, int(os.environ.get("UMLS_GUIDANCE_NUM_WORKERS", "1")))
+    cache_conn = init_schema_guidance_db(output_dir / SCHEMA_GUIDANCE_DB)
+    cached_results = load_cached_schema_guidance(cache_conn, documents, input_dir)
+    pending_documents = [path for path in documents if path.as_posix() not in cached_results]
+
+    progress_message(
+        f"UMLS guidance cache: reused {len(cached_results):,} document(s), "
+        f"computing {len(pending_documents):,} document(s)"
+    )
+    if event_logger is not None:
+        event_logger.event(
+            "schema_guidance_cache",
+            "completed",
+            cached_document_count=len(cached_results),
+            pending_document_count=len(pending_documents),
+            cache_db=(output_dir / SCHEMA_GUIDANCE_DB).as_posix(),
         )
-        hint_block = format_concept_hint_block(mentions, max_mentions=20, max_relations=20)
-        if hint_block:
-            hint_by_source[path.as_posix()] = hint_block
+
+    def handle_result(doc_number: int, result: SchemaGuidanceDocResult, *, persist: bool) -> None:
+        candidate_counts_by_source[result.path] = result.candidate_term_count
+        counts_by_source[result.path] = result.mention_count
+        observed_entity_types.update(result.entity_types)
+        if result.hint_block:
+            hint_by_source[result.path] = result.hint_block
+        if persist:
+            upsert_schema_guidance_result(cache_conn, result)
+        progress_message(
+            f"UMLS guidance {doc_number}/{total_documents} completed: {result.source_name} "
+            f"-> {result.mention_count} concepts in {result.duration_seconds}s"
+        )
+        if event_logger is not None:
+            event_logger.event(
+                "schema_guidance_document",
+                "completed",
+                source_path=result.path,
+                source_name=result.source_name,
+                candidate_term_count=result.candidate_term_count,
+                umls_concept_count=result.mention_count,
+                has_hint_block=bool(result.hint_block),
+                duration_seconds=result.duration_seconds,
+            )
+
+    for path in documents:
+        cached = cached_results.get(path.as_posix())
+        if cached is None:
+            continue
+        candidate_counts_by_source[cached.path] = cached.candidate_term_count
+        counts_by_source[cached.path] = cached.mention_count
+        observed_entity_types.update(cached.entity_types)
+        if cached.hint_block:
+            hint_by_source[cached.path] = cached.hint_block
+
+    if not pending_documents:
+        validation_schema = build_validation_schema({entity_type for entity_type in observed_entity_types if entity_type})
+        cache_conn.close()
+        return ClinicalSchemaGuidance(
+            validation_schema=validation_schema,
+            concept_hints_by_source=hint_by_source,
+            concept_count_by_source=counts_by_source,
+            candidate_count_by_source=candidate_counts_by_source,
+            relation_count=len(validation_schema),
+        )
+
+    completed_so_far = len(cached_results)
+    if worker_count == 1:
+        for doc_number, path in enumerate(
+            iter_progress(
+                pending_documents,
+                desc="UMLS schema guidance",
+                total=len(pending_documents),
+                unit="doc",
+            ),
+            start=1,
+        ):
+            text = read_source_file(path)
+            progress_message(
+                f"UMLS guidance {completed_so_far + doc_number}/{total_documents}: {path.name} "
+                f"({len(text):,} chars)"
+            )
+            if event_logger is not None:
+                event_logger.event(
+                    "schema_guidance_document",
+                    "started",
+                    source_path=path.as_posix(),
+                    source_name=path.name,
+                    char_count=len(text),
+                )
+            result = _build_schema_guidance_for_document(path, input_dir, limit)
+            handle_result(completed_so_far + doc_number, result, persist=True)
+    else:
+        progress_message(f"UMLS guidance parallel workers: {worker_count}")
+        if event_logger is not None:
+            for path in pending_documents:
+                event_logger.event(
+                    "schema_guidance_document",
+                    "queued",
+                    source_path=path.as_posix(),
+                    source_name=path.name,
+                )
+        with ThreadPoolExecutor(max_workers=worker_count, initializer=_init_schema_guidance_worker) as executor:
+            futures = {
+                executor.submit(_build_schema_guidance_for_document, path, input_dir, limit): path
+                for path in pending_documents
+            }
+            for doc_number, future in enumerate(
+                iter_progress(
+                    as_completed(futures),
+                    desc="UMLS schema guidance",
+                    total=len(pending_documents),
+                    unit="doc",
+                ),
+                start=1,
+            ):
+                result = future.result()
+                handle_result(completed_so_far + doc_number, result, persist=True)
 
     validation_schema = build_validation_schema({entity_type for entity_type in observed_entity_types if entity_type})
+    cache_conn.close()
     return ClinicalSchemaGuidance(
         validation_schema=validation_schema,
         concept_hints_by_source=hint_by_source,
@@ -247,7 +582,9 @@ def build_llm():
     from llama_index.llms.ollama import Ollama
 
     resolved_model = model_name or "llama3.1"
+    progress_message(f"Checking Ollama LLM model '{resolved_model}' at {ollama_endpoint()}")
     assert_ollama_available(role="LLM", model_name=resolved_model)
+    progress_message(f"Ollama LLM model reachable: {resolved_model}")
     return Ollama(
         model=resolved_model,
         base_url=ollama_endpoint(),
@@ -260,7 +597,9 @@ def build_embed_model():
     from llama_index.embeddings.ollama import OllamaEmbedding
 
     resolved_model = model_name or "embeddinggemma:300m"
+    progress_message(f"Checking Ollama embedding model '{resolved_model}' at {ollama_endpoint()}")
     assert_ollama_available(role="embedding", model_name=resolved_model)
+    progress_message(f"Ollama embedding model reachable: {resolved_model}")
     return OllamaEmbedding(
         model_name=resolved_model,
         base_url=ollama_endpoint(),
@@ -457,6 +796,7 @@ def _create_empty_index(schema_guided: bool, validation_schema: list[tuple[str, 
         llm=llm,
         embed_model=embed_model,
         use_async=False,
+        show_progress=progress_enabled(),
     )
 
 
@@ -479,6 +819,7 @@ def ensure_index(
 
     run_id = new_run_id("index_build")
     event_logger = JsonlLogger(INDEX_EVENT_LOG, run_id=run_id)
+    progress_message(f"Detailed build log: {INDEX_EVENT_LOG}")
     event_logger.event(
         "index_build",
         "started",
@@ -521,7 +862,19 @@ def ensure_index(
     if use_umls and not env_bool("UMLS_ENABLED", False):
         raise ValueError("UMLS_ENABLED must be true to build a UMLS-guided medical index.")
 
-    guidance = build_schema_guidance(documents, input_dir) if use_umls else None
+    guidance = None
+    if use_umls:
+        progress_message(f"Phase 1/3: building UMLS schema guidance for {len(documents)} source document(s)")
+        guidance_started_at = time.perf_counter()
+        guidance = build_schema_guidance(documents, input_dir, output_dir, event_logger=event_logger)
+        progress_message(
+            "Phase 1/3 complete: "
+            f"{sum(guidance.concept_count_by_source.values())} concepts across "
+            f"{len(guidance.concept_hints_by_source)} hinted document(s) in "
+            f"{round(time.perf_counter() - guidance_started_at, 2)}s"
+        )
+    else:
+        progress_message("Phase 1/3 skipped: UMLS guidance disabled")
     progress_message(
         f"Preparing index build for {len(documents)} source document(s) into {output_dir}"
     )
@@ -538,7 +891,11 @@ def ensure_index(
     if checkpoint_db.exists():
         checkpoint_db.unlink()
 
+    progress_message("Phase 2/3: initializing property graph index and validating Ollama models")
     index = _create_empty_index(schema_guided=schema_guided, validation_schema=(guidance.validation_schema if guidance else None))
+    initial_counts = _graph_counts(index)
+    if initial_counts is not None:
+        progress_message(f"Phase 2/3 complete: initialized graph with {_format_graph_counts(initial_counts)}")
     conn = init_checkpoint_db(checkpoint_db)
     pending = documents
 
@@ -562,9 +919,15 @@ def ensure_index(
     batches = [pending[i : i + batch_size] for i in range(0, len(pending), batch_size)]
     last_error: Exception | None = None
     last_error_traceback: str | None = None
+    total_documents = len(documents)
+    processed_documents = 0
 
     for attempt in range(1, max_retries + 1):
         try:
+            progress_message(
+                f"Phase 3/3: indexing {total_documents} source document(s) "
+                f"across {len(batches)} batch(es)"
+            )
             progress_message(f"Index build attempt {attempt}/{max_retries}")
             for batch_number, batch in enumerate(
                 iter_progress(
@@ -604,6 +967,7 @@ def ensure_index(
                 ):
                     source_path = doc.metadata.get("source_path")
                     source_name = doc.metadata.get("source_name")
+                    processed_documents += 1
                     hint_count = 0
                     concept_count = 0
                     candidate_count = 0
@@ -611,6 +975,13 @@ def ensure_index(
                         hint_count = 1 if guidance.concept_hints_by_source.get(source_path) else 0
                         candidate_count = guidance.candidate_count_by_source.get(source_path, 0)
                         concept_count = guidance.concept_count_by_source.get(source_path, 0)
+                    doc_started_at = time.perf_counter()
+                    graph_before = _graph_counts(index)
+                    progress_message(
+                        f"Indexing document {processed_documents}/{total_documents}: "
+                        f"{source_name or doc.id_} "
+                        f"(candidate_terms={candidate_count}, umls_concepts={concept_count})"
+                    )
                     event_logger.event(
                         "index_document",
                         "started",
@@ -642,8 +1013,16 @@ def ensure_index(
                             error_type=type(exc).__name__,
                             error=str(exc),
                             traceback=traceback.format_exc(limit=20),
+                            duration_seconds=round(time.perf_counter() - doc_started_at, 2),
                         )
                         raise
+                    graph_after = _graph_counts(index)
+                    duration_seconds = round(time.perf_counter() - doc_started_at, 2)
+                    progress_message(
+                        f"Indexed document {processed_documents}/{total_documents}: "
+                        f"{source_name or doc.id_} in {duration_seconds}s"
+                        f"{_format_graph_delta(graph_before, graph_after)}"
+                    )
                     event_logger.event(
                         "index_document",
                         "completed",
@@ -656,6 +1035,12 @@ def ensure_index(
                         candidate_term_count=candidate_count,
                         umls_concept_count=concept_count,
                         has_concept_hint=bool(hint_count),
+                        duration_seconds=duration_seconds,
+                        graph_nodes=(graph_after.total_nodes if graph_after else None),
+                        graph_entity_nodes=(graph_after.entity_nodes if graph_after else None),
+                        graph_chunk_nodes=(graph_after.chunk_nodes if graph_after else None),
+                        graph_relationships=(graph_after.relation_count if graph_after else None),
+                        graph_triplets=(graph_after.triplet_count if graph_after else None),
                     )
                 for doc in batch_docs:
                     mark_status(conn, doc.id_, "done")

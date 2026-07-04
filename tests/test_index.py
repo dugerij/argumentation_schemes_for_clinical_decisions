@@ -1,7 +1,20 @@
 import asyncio
+from types import SimpleNamespace
 from pathlib import Path
 
-from retrieval.index import _run_coro_blocking, source_documents
+from llama_index.core.graph_stores.simple_labelled import SimplePropertyGraphStore
+from llama_index.core.graph_stores.types import ChunkNode, EntityNode, Relation
+
+from retrieval.index import (
+    SchemaGuidanceDocResult,
+    _graph_counts,
+    _run_coro_blocking,
+    init_schema_guidance_db,
+    load_cached_schema_guidance,
+    source_documents,
+    source_file_fingerprint,
+    upsert_schema_guidance_result,
+)
 
 
 async def _sample_coro(value: str) -> str:
@@ -38,3 +51,79 @@ def test_source_documents_only_counts_extracted_txt_files(tmp_path):
         "note1.txt",
         "note2.txt",
     ]
+
+
+def test_graph_counts_reports_nodes_relations_and_triplets():
+    store = SimplePropertyGraphStore()
+    chunk = ChunkNode(text="blood pressure stable", id_="chunk-1")
+    disease = EntityNode(name="hypertension")
+    medication = EntityNode(name="amlodipine")
+
+    store.upsert_nodes([chunk, disease, medication])
+    store.upsert_relations(
+        [
+            Relation(label="MENTIONS", source_id=chunk.id, target_id=disease.id),
+            Relation(label="TREATS", source_id=medication.id, target_id=disease.id),
+        ]
+    )
+
+    stats = _graph_counts(SimpleNamespace(property_graph_store=store))
+
+    assert stats is not None
+    assert stats.total_nodes == 3
+    assert stats.entity_nodes == 2
+    assert stats.chunk_nodes == 1
+    assert stats.relation_count == 2
+    assert stats.triplet_count == 2
+
+
+def test_schema_guidance_cache_reuses_matching_fingerprints(tmp_path):
+    input_dir = tmp_path / "evidence"
+    input_dir.mkdir()
+    note = input_dir / "note1.txt"
+    note.write_text("hypertension amlodipine", encoding="utf-8")
+
+    conn = init_schema_guidance_db(tmp_path / "schema_guidance.sqlite")
+    result = SchemaGuidanceDocResult(
+        path=note.as_posix(),
+        source_fingerprint=source_file_fingerprint(note, input_dir),
+        source_name=note.name,
+        char_count=23,
+        candidate_term_count=2,
+        mention_count=2,
+        entity_types=("DISEASE", "MEDICATION"),
+        hint_block="UMLS concept hints:",
+        duration_seconds=0.12,
+    )
+    upsert_schema_guidance_result(conn, result)
+
+    cached = load_cached_schema_guidance(conn, [note], input_dir)
+
+    assert note.as_posix() in cached
+    assert cached[note.as_posix()].mention_count == 2
+    assert cached[note.as_posix()].entity_types == ("DISEASE", "MEDICATION")
+
+
+def test_schema_guidance_cache_ignores_stale_fingerprints(tmp_path):
+    input_dir = tmp_path / "evidence"
+    input_dir.mkdir()
+    note = input_dir / "note1.txt"
+    note.write_text("hypertension", encoding="utf-8")
+
+    conn = init_schema_guidance_db(tmp_path / "schema_guidance.sqlite")
+    result = SchemaGuidanceDocResult(
+        path=note.as_posix(),
+        source_fingerprint="stale",
+        source_name=note.name,
+        char_count=12,
+        candidate_term_count=1,
+        mention_count=1,
+        entity_types=("DISEASE",),
+        hint_block="UMLS concept hints:",
+        duration_seconds=0.1,
+    )
+    upsert_schema_guidance_result(conn, result)
+
+    cached = load_cached_schema_guidance(conn, [note], input_dir)
+
+    assert cached == {}

@@ -18,7 +18,7 @@ class ConfigParsingTests(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
-                "INPUT_BASE_DIR": "data/evidence/mimic_discharge_subset",
+                "INPUT_BASE_DIR": "data/evidence/mimic_discharge_full",
                 "OUTPUT_BASE_DIR": "output",
                 "UMLS_ENABLED": "false",
             },
@@ -32,7 +32,7 @@ class ConfigParsingTests(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
-                "INPUT_BASE_DIR": "data/evidence/mimic_discharge_subset",
+                "INPUT_BASE_DIR": "data/evidence/mimic_discharge_full",
                 "OUTPUT_BASE_DIR": "output",
                 "UMLS_ENABLED": "false",
                 "GENERATION_MODEL_PROVIDER": "openai",

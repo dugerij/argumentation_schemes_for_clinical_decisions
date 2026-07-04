@@ -46,7 +46,7 @@ def main() -> None:
     args = parse_args()
     startup_check(require_models=(args.command in BUILD_COMMANDS), require_paths=(args.command in BUILD_COMMANDS))
 
-    input_dir = Path(args.input_dir or os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
+    input_dir = Path(args.input_dir or os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_full"))
     output_dir = Path(args.output_dir or os.environ.get("OUTPUT_BASE_DIR", "output"))
     csv_path = resolve_mimic_discharge_csv(args.csv_path)
 

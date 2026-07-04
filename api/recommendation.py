@@ -67,7 +67,7 @@ async def generate_recommendation(request: RecommendationRequest) -> Recommendat
     rag_available = False
 
     output_dir = Path(os.environ.get("OUTPUT_BASE_DIR", "output"))
-    input_dir = Path(os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
+    input_dir = Path(os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_full"))
 
     if request.use_rag:
         with event_logger.timed("ensure_index", output_dir=output_dir, input_dir=input_dir):

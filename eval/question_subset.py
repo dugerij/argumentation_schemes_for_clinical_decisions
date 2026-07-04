@@ -1,17 +1,45 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any
 
-from helpers.term_matching import KeywordSeedMatcher, TermMatcher, tokenize
+TOKEN_RE = re.compile(r"[a-z0-9]+")
+STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "was",
+    "were",
+    "with",
+}
 
+def tokenize(text: str) -> set[str]:
+    """Return lowercase word tokens with common stopwords removed."""
 
-@dataclass(frozen=True)
-class DomainQuestionSubsetResult:
-    kept_questions: list[dict[str, Any]]
-    metadata: list[dict[str, Any]]
+    return {
+        token
+        for token in TOKEN_RE.findall(text.lower())
+        if len(token) > 2 and token not in STOPWORDS
+    }
 
 
 def load_questions_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -81,40 +109,3 @@ def filter_questions_by_note_overlap(
             }
         )
     return retained, retained_metadata + rejected
-
-
-def filter_questions_for_domain_and_notes(
-    *,
-    questions: list[dict[str, Any]],
-    domain: str,
-    notes_dir: Path,
-    min_overlap_terms: int = 2,
-    limit: int | None = None,
-    matcher: TermMatcher | None = None,
-) -> DomainQuestionSubsetResult:
-    note_vocabulary = load_note_vocabulary(notes_dir)
-    kept: list[tuple[int, int, dict[str, Any], list[str]]] = []
-    metadata: list[dict[str, Any]] = []
-    fallback_matcher = matcher or KeywordSeedMatcher((domain.replace("_", " "),))
-
-    for item in questions:
-        text = question_text(item)
-        overlap = sorted(tokenize(text) & note_vocabulary)
-        domain_hits, matched_terms = fallback_matcher.match_details(text)
-        included = domain_hits > 0 and len(overlap) >= min_overlap_terms
-        metadata.append(
-            {
-                "question": item.get("question"),
-                "domain_hit_count": domain_hits,
-                "matched_terms": matched_terms[:20],
-                "overlap_count": len(overlap),
-                "overlap_terms": overlap[:20],
-                "included": included,
-            }
-        )
-        if included:
-            kept.append((domain_hits, len(overlap), item, overlap[:20]))
-
-    kept.sort(key=lambda row: (-row[0], -row[1], str(row[2].get("question", ""))))
-    selected = [item for _, _, item, _ in (kept if limit is None else kept[:limit])]
-    return DomainQuestionSubsetResult(kept_questions=selected, metadata=metadata)

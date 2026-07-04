@@ -64,7 +64,7 @@ async def run_pipeline_check(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run an end-to-end smoke check for indexing, retrieval, and recommendation.")
-    parser.add_argument("--input-dir", default=os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_subset"))
+    parser.add_argument("--input-dir", default=os.environ.get("INPUT_BASE_DIR", "data/evidence/mimic_discharge_full"))
     parser.add_argument("--output-dir", default=os.environ.get("OUTPUT_BASE_DIR", "output"))
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--clinical-goal", default=None)

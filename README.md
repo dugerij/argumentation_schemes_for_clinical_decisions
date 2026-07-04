@@ -10,7 +10,7 @@ Supporting documentation:
 Workflow:
 
 1. download `MIMIC-IV-Note`
-2. extract discharge summaries into local `.txt` evidence files
+2. extract the full discharge-note corpus into local `.txt` evidence files
 3. build the index
 4. run retrieval and reasoning
 
@@ -35,7 +35,7 @@ cp .env.example .env
 Main runtime paths:
 
 ```text
-INPUT_BASE_DIR=data/evidence/mimic_discharge_subset
+INPUT_BASE_DIR=data/evidence/mimic_discharge_full
 OUTPUT_BASE_DIR=output
 ```
 
@@ -57,10 +57,30 @@ or:
 data/mimic-iv-note-deidentified-free-text-clinical-notes-2.2/note/discharge.csv.gz
 ```
 
-Baseline UMLS settings:
+Default UMLS settings:
 
 ```bash
 UMLS_ENABLED=true
+UMLS_BACKEND=local
+UMLS_LOCAL_DB_PATH=output/cache/umls_local.sqlite3
+UMLS_GUIDANCE_NUM_WORKERS=1
+```
+
+Build the local SQLite lookup before indexing:
+
+```bash
+export UMLS_API_KEY=<your-umls-api-key>
+python scripts/download_umls.py
+python -m retrieval.concepts.local_umls build --meta-dir data/umls
+```
+
+`python scripts/download_umls.py` uses the UTS Release API to resolve the current UMLS archive, downloads it through the UTS Download API, and extracts it under `data/umls`. Set `UMLS_API_KEY` in your environment first.
+The builder will auto-discover a nested `META` directory under the path you pass, so `data/umls`, `data/umls/META`, and versioned layouts such as `data/umls/2026AA/META` all work.
+
+If you prefer the remote UMLS API instead, set:
+
+```bash
+UMLS_BACKEND=api
 UMLS_API_KEY=<your-umls-api-key>
 ```
 
@@ -74,10 +94,16 @@ SHOW_PROGRESS=true
 
 ### 1. Extract Notes
 
-Place the MIMIC-IV-Note discharge file in the repo, or keep the extracted PhysioNet folder as-is, then extract the discharge summaries into plain text evidence files:
+Place the MIMIC-IV-Note discharge file in the repo, or keep the extracted PhysioNet folder as-is, then extract the full discharge-note corpus into plain text evidence files:
 
 ```bash
-python make_index.py extract-mimic-discharge --limit 25 --max-chars all
+python make_index.py extract-mimic-discharge --limit all --max-chars all
+```
+
+For quicker iteration, start with a smaller subset:
+
+```bash
+python make_index.py extract-mimic-discharge --limit 1000 --max-chars all
 ```
 
 ### 2. Build The Index
@@ -86,44 +112,15 @@ python make_index.py extract-mimic-discharge --limit 25 --max-chars all
 python make_index.py build
 ```
 
-### 3. Optional Domain Subset
+The build path uses the extracted full-note corpus for retrieval and applies UMLS concept normalization during graph construction. Local UMLS lookup is the default because it is practical for large corpora.
 
-Create a matched domain subset of discharge notes and MedQA questions:
-
-```bash
-python make_domain_subset.py \
-  --domain renal_metabolic \
-  --notes-output-dir data/evidence/renal_metabolic_discharge_subset \
-  --questions-output-path data/eval/renal_metabolic_medqa.jsonl \
-  --note-limit all \
-  --question-limit all
-```
-
-The command uses a vocabulary-first specialty filter. For the default renal workflow, it expands curated renal diagnosis seeds through UMLS once, builds a matching vocabulary from that expansion, and then filters notes and questions with plain term matching.
-
-`UMLS_API_KEY` is required for the default `vocab` matcher. If you want a fully local fallback, you can switch to `--notes-matcher keyword --questions-matcher keyword`.
-
-The default `--min-domain-hits` is `3`. A diagnosis phrase match contributes extra weight, so a note can be kept either because a nephrology diagnosis is mentioned directly or because it contains several specialty terms.
-
-To adapt the same pipeline to another specialty, provide one or more seed terms:
-
-```bash
-python make_domain_subset.py \
-  --domain neurology \
-  --seed-term stroke \
-  --seed-term seizure\ disorder \
-  --notes-output-dir data/evidence/neurology_discharge_subset \
-  --questions-output-path data/eval/neurology_medqa.jsonl \
-  --note-limit all \
-  --question-limit all
-```
-
-### 4. Optional Schema-Guided Build
+### 3. Optional Schema-Guided Build
 
 Use the schema-guided graph only if you specifically want that build mode:
 
 ```text
 UMLS_ENABLED=true
+UMLS_BACKEND=local
 ```
 
 Command:
@@ -134,11 +131,12 @@ python make_index.py build-schema
 
 `build` and `build-schema` are alternatives, not a sequence.
 
-Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
+`build-schema` is substantially slower than `build`. On the full discharge-note corpus, start with a smaller extracted subset unless you already know you need the schema-guided graph.
+Schema guidance now caches per-document UMLS results on disk, so restarting the same `build-schema` command reuses completed unchanged notes instead of recomputing phase 1 from zero.
+
+Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `UMLS_HINT_LIMIT`, `UMLS_GUIDANCE_NUM_WORKERS`, `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
 
 ### Run Retrieval Workflows
-
-To run retrieval or benchmarks on a domain subset, point `INPUT_BASE_DIR` at the subset folder and use the matching question file where applicable.
 
 Pipeline check:
 
@@ -215,7 +213,7 @@ python -m eval.pull_records --limit 5
 Start the local read-only API with:
 
 ```bash
-uvicorn api.app:app --reload
+python main.py serve-api --reload
 ```
 
 Useful endpoints:
