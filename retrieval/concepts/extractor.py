@@ -31,6 +31,8 @@ class UMLSConceptExtractor:
                 continue
 
             concept = self.client.best_match(term)
+            if concept is None:
+                continue
             pattern = re.compile(rf"\b{re.escape(term)}\b", flags=re.IGNORECASE)
 
             for match in pattern.finditer(text):

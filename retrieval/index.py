@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
@@ -13,11 +14,12 @@ from typing import Any
 
 from helpers.config import env_bool, env_int
 from helpers.jsonl import JsonlLogger, new_run_id
-from helpers.ollama import assert_ollama_available, ollama_endpoint
+from helpers.ollama import assert_ollama_available, ollama_embed_endpoint, ollama_headers, ollama_llm_endpoint
 from helpers.paths import INDEX_BUILD_LOG_PATH
 from helpers.progress import iter_progress, progress_enabled, progress_message
 from retrieval.concepts.candidates import extract_candidate_terms
 from retrieval.concepts.extractor import UMLSConceptExtractor
+from retrieval.concepts.hybrid_extractor import HybridClinicalPathExtractor
 from retrieval.concepts.medical_schema import (
     ClinicalSchemaGuidance,
     MedicalEntityType,
@@ -29,6 +31,7 @@ from retrieval.concepts.medical_schema import (
     entity_type_for_category,
 )
 from retrieval.concepts.umls import UMLSConfig, create_umls_client
+from retrieval.property_graph import ClinicalPropertyGraphStore
 
 
 INDEX_MANIFEST = "index_manifest.json"
@@ -65,6 +68,78 @@ class SchemaGuidanceDocResult:
 
 
 _SCHEMA_GUIDANCE_WORKER: dict[str, Any] = {}
+
+
+class _PersistentAsyncRunner:
+    """Run coroutines on a dedicated long-lived event loop thread.
+
+    Schema-guided extraction reuses the same LLM client across many documents.
+    Recreating an event loop for every document can leave that client bound to a
+    closed loop, which then fails on the next insert. This runner keeps a single
+    background loop alive for repeated synchronous calls.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+
+    def _spawn_loop(self) -> asyncio.AbstractEventLoop:
+        ready = threading.Event()
+        state: dict[str, asyncio.AbstractEventLoop] = {}
+
+        def target() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            state["loop"] = loop
+            ready.set()
+            loop.run_forever()
+
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+
+        thread = threading.Thread(
+            target=target,
+            name="schema-llm-path-extractor-loop",
+            daemon=True,
+        )
+        thread.start()
+        ready.wait()
+        self._thread = thread
+        self._loop = state["loop"]
+        return self._loop
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        with self._lock:
+            if self._loop is not None and not self._loop.is_closed() and self._thread is not None and self._thread.is_alive():
+                return self._loop
+            return self._spawn_loop()
+
+    def run(self, coro):
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result()
+
+    def close(self) -> None:
+        with self._lock:
+            loop = self._loop
+            thread = self._thread
+            self._loop = None
+            self._thread = None
+
+        if loop is None or thread is None or loop.is_closed():
+            return
+
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+
+
+_SCHEMA_EXTRACTOR_RUNNER = _PersistentAsyncRunner()
+atexit.register(_SCHEMA_EXTRACTOR_RUNNER.close)
 
 
 def _run_coro_blocking(coro):
@@ -267,6 +342,14 @@ def already_done(conn: sqlite3.Connection, doc_id: str) -> bool:
     return row is not None and row[0] == "done"
 
 
+def completed_doc_ids(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute(
+        "SELECT doc_id FROM indexed_docs WHERE status = ?",
+        ("done",),
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def mark_status(conn: sqlite3.Connection, doc_id: str, status: str, error: str | None = None) -> None:
     conn.execute(
         """
@@ -298,23 +381,38 @@ def read_source_file(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def build_document(path: Path, input_dir: Path, hint_block: str | None = None):
+def build_document(path: Path, input_dir: Path, hint_block: str | None = None, doc_id: str | None = None):
     from llama_index.core import Document
 
-    doc_id = file_doc_id(path, input_dir)
+    resolved_doc_id = doc_id or file_doc_id(path, input_dir)
     text = read_source_file(path)
-    if hint_block:
-        text = f"{hint_block}\n\nSOURCE TEXT:\n{text}"
     metadata = {
         "source_path": path.as_posix(),
         "source_name": path.name,
         "source_type": "clinical_note",
+        "umls_hint_block": hint_block,
     }
 
     try:
-        return Document(text=text, id_=doc_id, metadata=metadata)
+        return Document(
+            text=text,
+            id_=resolved_doc_id,
+            metadata=metadata,
+            excluded_embed_metadata_keys=["source_path", "source_name", "source_type", "umls_hint_block"],
+            excluded_llm_metadata_keys=["source_path", "source_name", "source_type", "umls_hint_block"],
+        )
     except TypeError:
-        return Document(text=text, doc_id=doc_id, metadata=metadata)
+        document = Document(text=text, doc_id=resolved_doc_id, metadata=metadata)
+        document.excluded_embed_metadata_keys = ["source_path", "source_name", "source_type", "umls_hint_block"]
+        document.excluded_llm_metadata_keys = ["source_path", "source_name", "source_type", "umls_hint_block"]
+        return document
+def pending_documents(
+    documents: list[Path],
+    doc_ids_by_path: dict[str, str],
+    conn: sqlite3.Connection,
+) -> list[Path]:
+    done = completed_doc_ids(conn)
+    return [path for path in documents if doc_ids_by_path[path.as_posix()] not in done]
 
 
 def _schema_guided_enabled() -> bool:
@@ -353,10 +451,11 @@ def _graph_counts(index: Any) -> GraphCounts | None:
     nodes = list(getattr(graph, "nodes", {}).values())
     relations = getattr(graph, "relations", {})
     triplets = getattr(graph, "triplets", set())
+    chunk_nodes = sum(1 for node in nodes if getattr(node, "label", None) == "text_chunk")
     return GraphCounts(
         total_nodes=len(nodes),
-        entity_nodes=sum(1 for node in nodes if getattr(node, "label", None) == "entity"),
-        chunk_nodes=sum(1 for node in nodes if getattr(node, "label", None) == "text_chunk"),
+        entity_nodes=max(0, len(nodes) - chunk_nodes),
+        chunk_nodes=chunk_nodes,
         relation_count=len(relations),
         triplet_count=len(triplets),
     )
@@ -582,28 +681,111 @@ def build_llm():
     from llama_index.llms.ollama import Ollama
 
     resolved_model = model_name or "llama3.1"
-    progress_message(f"Checking Ollama LLM model '{resolved_model}' at {ollama_endpoint()}")
-    assert_ollama_available(role="LLM", model_name=resolved_model)
+    endpoint = ollama_llm_endpoint()
+    progress_message(f"Checking Ollama LLM model '{resolved_model}' at {endpoint}")
+    assert_ollama_available(role="LLM", model_name=resolved_model, endpoint=endpoint)
     progress_message(f"Ollama LLM model reachable: {resolved_model}")
+    headers = ollama_headers() or None
     return Ollama(
         model=resolved_model,
-        base_url=ollama_endpoint(),
+        base_url=endpoint,
         request_timeout=request_timeout,
+        headers=headers,
     )
 
 
 def build_embed_model():
     model_name = os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")).strip()
+    embed_batch_size = int(os.environ.get("INDEX_EMBED_BATCH_SIZE", "32"))
     from llama_index.embeddings.ollama import OllamaEmbedding
 
     resolved_model = model_name or "embeddinggemma:300m"
-    progress_message(f"Checking Ollama embedding model '{resolved_model}' at {ollama_endpoint()}")
-    assert_ollama_available(role="embedding", model_name=resolved_model)
+    endpoint = ollama_embed_endpoint()
+    progress_message(f"Checking Ollama embedding model '{resolved_model}' at {endpoint}")
+    assert_ollama_available(role="embedding", model_name=resolved_model, endpoint=endpoint)
     progress_message(f"Ollama embedding model reachable: {resolved_model}")
+    headers = ollama_headers()
     return OllamaEmbedding(
         model_name=resolved_model,
-        base_url=ollama_endpoint(),
+        base_url=endpoint,
+        embed_batch_size=embed_batch_size,
+        client_kwargs={"headers": headers} if headers else None,
     )
+
+
+def _build_kg_extractors(
+    llm: Any,
+    schema_guided: bool,
+    use_umls: bool,
+    validation_schema: list[tuple[str, str, str]] | None = None,
+):
+    from llama_index.core.indices.property_graph import SchemaLLMPathExtractor
+    from llama_index.core.schema import MetadataMode
+
+    class HintedSchemaLLMPathExtractor(SchemaLLMPathExtractor):
+        async def _aextract(self, node):
+            text = node.get_content(metadata_mode=MetadataMode.NONE)
+            hint_block = node.metadata.get("umls_hint_block") if isinstance(getattr(node, "metadata", None), dict) else None
+            if hint_block:
+                text = f"{hint_block}\n\nSOURCE TEXT:\n{text}"
+            try:
+                kg_schema = await self.llm.astructured_predict(
+                    self.kg_schema_cls,
+                    self.extract_prompt,
+                    text=text,
+                    max_triplets_per_chunk=self.max_triplets_per_chunk,
+                )
+                triplets = self._prune_invalid_triplets(kg_schema)
+            except (ValueError, TypeError, AttributeError):
+                triplets = []
+
+            existing_nodes = node.metadata.pop("nodes", [])
+            existing_relations = node.metadata.pop("relations", [])
+
+            metadata = node.metadata.copy()
+            metadata.pop("umls_hint_block", None)
+            for subj, rel, obj in triplets:
+                subj.properties.update(metadata)
+                obj.properties.update(metadata)
+                rel.properties.update(metadata)
+
+                existing_relations.append(rel)
+                existing_nodes.append(subj)
+                existing_nodes.append(obj)
+
+            node.metadata["nodes"] = existing_nodes
+            node.metadata["relations"] = existing_relations
+            return node
+
+        def __call__(self, nodes, show_progress: bool = False, **kwargs: Any):
+            return _SCHEMA_EXTRACTOR_RUNNER.run(
+                self.acall(nodes, show_progress=show_progress, **kwargs)
+            )
+
+    hybrid_candidate_limit = int(os.environ.get("INDEX_HYBRID_CANDIDATE_LIMIT", "24"))
+    extractors = [
+        HybridClinicalPathExtractor(
+            umls_client=(_umls_client() if use_umls else None),
+            candidate_limit=hybrid_candidate_limit,
+        )
+    ]
+
+    schema_llm_enrich = env_bool("INDEX_SCHEMA_LLM_ENRICH", False)
+    if schema_guided and schema_llm_enrich:
+        schema_num_workers = int(os.environ.get("INDEX_SCHEMA_NUM_WORKERS", "1"))
+        schema_triplets = int(os.environ.get("INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK", "6"))
+        extractors.append(
+            HintedSchemaLLMPathExtractor(
+                llm=llm,
+                possible_entities=MedicalEntityType,
+                possible_relations=MedicalRelationType,
+                strict=True,
+                kg_validation_schema=validation_schema or build_validation_schema(set(ENTITY_LABELS)),
+                max_triplets_per_chunk=schema_triplets,
+                num_workers=schema_num_workers,
+            )
+        )
+    return extractors
 
 
 def manifest_path(output_dir: Path) -> Path:
@@ -624,6 +806,8 @@ def metadata_for_sources(
         os.environ.get("RAG_EMBEDDING_MODEL_PROVIDER", "ollama"),
     ).strip().lower()
     embedding_model = os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")).strip()
+    embed_kg_nodes = env_bool("INDEX_EMBED_KG_NODES", False)
+    schema_llm_enrich = env_bool("INDEX_SCHEMA_LLM_ENRICH", False)
     return {
         "backend": "llamaindex",
         "index_mode": "schema_guided" if schema_guided else "implicit",
@@ -637,7 +821,9 @@ def metadata_for_sources(
         "entity_types": list(ENTITY_LABELS),
         "relation_types": list(RELATION_LABELS),
         "schema_guided": schema_guided,
+        "schema_llm_enrich": schema_llm_enrich,
         "umls_enabled": use_umls,
+        "embed_kg_nodes": embed_kg_nodes,
         "umls_concept_count": sum((guidance.concept_count_by_source.get(path.as_posix(), 0) if guidance else 0) for path in documents),
         "candidate_term_count": sum((guidance.candidate_count_by_source.get(path.as_posix(), 0) if guidance else 0) for path in documents),
         "relation_hint_count": guidance.relation_count if guidance else 0,
@@ -680,6 +866,8 @@ def index_needs_rebuild(
         os.environ.get("RAG_EMBEDDING_MODEL_PROVIDER", "ollama"),
     ).strip().lower()
     current_embedding_model = os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")).strip()
+    current_embed_kg_nodes = env_bool("INDEX_EMBED_KG_NODES", False)
+    current_schema_llm_enrich = env_bool("INDEX_SCHEMA_LLM_ENRICH", False)
     if schema_guided and (
         manifest.get("llm_provider") != current_llm_provider or manifest.get("llm_model") != current_llm_model
     ):
@@ -688,6 +876,10 @@ def index_needs_rebuild(
         reasons.append("embedding model changed")
     if bool(manifest.get("umls_enabled", False)) != use_umls:
         reasons.append("UMLS setting changed")
+    if bool(manifest.get("embed_kg_nodes", True)) != current_embed_kg_nodes:
+        reasons.append("KG node embedding setting changed")
+    if bool(manifest.get("schema_llm_enrich", False)) != current_schema_llm_enrich:
+        reasons.append("schema LLM enrichment setting changed")
 
     current_fingerprint = fingerprint_documents(documents, input_dir)
     if manifest.get("source_fingerprint") != current_fingerprint:
@@ -696,112 +888,87 @@ def index_needs_rebuild(
     return bool(reasons), reasons
 
 
-def _load_existing_index(output_dir: Path):
-    from llama_index.core import Settings, StorageContext, load_index_from_storage
+def _load_existing_index(
+    output_dir: Path,
+    schema_guided: bool,
+    use_umls: bool,
+    validation_schema: list[tuple[str, str, str]] | None = None,
+):
+    from llama_index.core import Settings, StorageContext
+    from llama_index.core.indices.property_graph import PropertyGraphIndex
 
     llm = build_llm()
     embed_model = build_embed_model()
+    embed_kg_nodes = env_bool("INDEX_EMBED_KG_NODES", False)
     Settings.llm = llm
     Settings.embed_model = embed_model
-    storage_context = StorageContext.from_defaults(persist_dir=str(output_dir))
-    try:
-        index = load_index_from_storage(
-            storage_context,
-            llm=llm,
-            embed_model=embed_model,
-        )
-    except Exception:
-        from llama_index.core.indices.property_graph import PropertyGraphIndex
-
-        if hasattr(PropertyGraphIndex, "from_existing"):
-            index = PropertyGraphIndex.from_existing(
-                property_graph_store=storage_context.property_graph_store,
-                vector_store=getattr(storage_context, "vector_store", None),
-                llm=llm,
-                embed_model=embed_model,
-            )
-        else:
-            raise
+    property_graph_store = None
+    if (output_dir / "property_graph_store.json").exists():
+        property_graph_store = ClinicalPropertyGraphStore.from_persist_dir(str(output_dir))
+    storage_context = StorageContext.from_defaults(
+        persist_dir=str(output_dir),
+        property_graph_store=property_graph_store,
+    )
+    index = PropertyGraphIndex(
+        nodes=[],
+        kg_extractors=_build_kg_extractors(
+            llm,
+            schema_guided=schema_guided,
+            use_umls=use_umls,
+            validation_schema=validation_schema,
+        ),
+        storage_context=storage_context,
+        llm=llm,
+        embed_model=embed_model,
+        embed_kg_nodes=embed_kg_nodes,
+        use_async=False,
+        show_progress=progress_enabled(),
+    )
 
     if hasattr(index, "_use_async"):
         index._use_async = False
+    index._index_mode = "schema_guided" if schema_guided else "implicit"
+    index._umls_enabled = use_umls
     return index
 
 
 def _create_empty_index(schema_guided: bool, validation_schema: list[tuple[str, str, str]] | None = None):
     from llama_index.core import StorageContext
-    from llama_index.core.indices.property_graph import (
-        ImplicitPathExtractor,
-        PropertyGraphIndex,
-        SchemaLLMPathExtractor,
-    )
-    from llama_index.core.graph_stores.types import KG_NODES_KEY, KG_RELATIONS_KEY
-    from llama_index.core.schema import MetadataMode
+    from llama_index.core.indices.property_graph import PropertyGraphIndex
 
-    class NotebookSafeSchemaLLMPathExtractor(SchemaLLMPathExtractor):
-        def __call__(self, nodes, show_progress: bool = False, **kwargs: Any):
-            extracted_nodes = []
-            for node in nodes:
-                text = node.get_content(metadata_mode=MetadataMode.LLM)
-                try:
-                    kg_schema = self.llm.structured_predict(
-                        self.kg_schema_cls,
-                        self.extract_prompt,
-                        text=text,
-                        max_triplets_per_chunk=self.max_triplets_per_chunk,
-                    )
-                    triplets = self._prune_invalid_triplets(kg_schema)
-                except (ValueError, TypeError, AttributeError):
-                    triplets = []
-
-                existing_nodes = node.metadata.pop(KG_NODES_KEY, [])
-                existing_relations = node.metadata.pop(KG_RELATIONS_KEY, [])
-                metadata = node.metadata.copy()
-
-                for subj, rel, obj in triplets:
-                    subj.properties.update(metadata)
-                    obj.properties.update(metadata)
-                    rel.properties.update(metadata)
-                    existing_relations.append(rel)
-                    existing_nodes.append(subj)
-                    existing_nodes.append(obj)
-
-                node.metadata[KG_NODES_KEY] = existing_nodes
-                node.metadata[KG_RELATIONS_KEY] = existing_relations
-                extracted_nodes.append(node)
-
-            return extracted_nodes
-
+    use_umls = env_bool("UMLS_ENABLED", False)
     llm = build_llm()
     embed_model = build_embed_model()
-    if schema_guided:
-        schema_num_workers = int(os.environ.get("INDEX_SCHEMA_NUM_WORKERS", "1"))
-        schema_triplets = int(os.environ.get("INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK", "6"))
-        kg_extractor = NotebookSafeSchemaLLMPathExtractor(
-            llm=llm,
-            possible_entities=MedicalEntityType,
-            possible_relations=MedicalRelationType,
-            strict=True,
-            kg_validation_schema=validation_schema or build_validation_schema(set(ENTITY_LABELS)),
-            max_triplets_per_chunk=schema_triplets,
-            num_workers=schema_num_workers,
-        )
-    else:
-        kg_extractor = ImplicitPathExtractor()
-    storage_context = StorageContext.from_defaults()
-    return PropertyGraphIndex(
+    embed_kg_nodes = env_bool("INDEX_EMBED_KG_NODES", False)
+    storage_context = StorageContext.from_defaults(
+        property_graph_store=ClinicalPropertyGraphStore()
+    )
+    index = PropertyGraphIndex(
         nodes=[],
-        kg_extractors=[kg_extractor],
+        kg_extractors=_build_kg_extractors(
+            llm,
+            schema_guided=schema_guided,
+            use_umls=use_umls,
+            validation_schema=validation_schema,
+        ),
         storage_context=storage_context,
         llm=llm,
         embed_model=embed_model,
+        embed_kg_nodes=embed_kg_nodes,
         use_async=False,
         show_progress=progress_enabled(),
     )
+    index._index_mode = "schema_guided" if schema_guided else "implicit"
+    index._umls_enabled = use_umls
+    return index
 
 
 def load_index(output_dir: Path):
-    return _load_existing_index(output_dir)
+    return _load_existing_index(
+        output_dir,
+        schema_guided=_schema_guided_enabled(),
+        use_umls=env_bool("UMLS_ENABLED", False),
+    )
 
 
 def ensure_index(
@@ -834,8 +1001,12 @@ def ensure_index(
         llm_request_timeout=float(os.environ.get("INDEX_LLM_REQUEST_TIMEOUT", str(DEFAULT_LLM_REQUEST_TIMEOUT))),
         embedding_provider=os.environ.get("INDEX_EMBEDDING_PROVIDER", os.environ.get("RAG_EMBEDDING_MODEL_PROVIDER", "ollama")),
         embedding_model=os.environ.get("INDEX_EMBEDDING_MODEL", os.environ.get("RAG_EMBEDDING_MODEL", "")),
+        embedding_batch_size=int(os.environ.get("INDEX_EMBED_BATCH_SIZE", "32")),
+        embed_kg_nodes=env_bool("INDEX_EMBED_KG_NODES", False),
         umls_enabled=env_bool("UMLS_ENABLED", False),
         umls_hint_limit=env_int("UMLS_HINT_LIMIT", DEFAULT_SCHEMA_HIT_LIMIT),
+        hybrid_candidate_limit=int(os.environ.get("INDEX_HYBRID_CANDIDATE_LIMIT", "24")),
+        schema_llm_enrich=env_bool("INDEX_SCHEMA_LLM_ENRICH", False),
         schema_num_workers=int(os.environ.get("INDEX_SCHEMA_NUM_WORKERS", "1")),
         schema_max_triplets_per_chunk=int(os.environ.get("INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK", "6")),
     )
@@ -863,7 +1034,8 @@ def ensure_index(
         raise ValueError("UMLS_ENABLED must be true to build a UMLS-guided medical index.")
 
     guidance = None
-    if use_umls:
+    schema_llm_enrich = schema_guided and env_bool("INDEX_SCHEMA_LLM_ENRICH", False)
+    if use_umls and schema_llm_enrich:
         progress_message(f"Phase 1/3: building UMLS schema guidance for {len(documents)} source document(s)")
         guidance_started_at = time.perf_counter()
         guidance = build_schema_guidance(documents, input_dir, output_dir, event_logger=event_logger)
@@ -874,7 +1046,10 @@ def ensure_index(
             f"{round(time.perf_counter() - guidance_started_at, 2)}s"
         )
     else:
-        progress_message("Phase 1/3 skipped: UMLS guidance disabled")
+        reason = "UMLS guidance disabled"
+        if use_umls and not schema_llm_enrich:
+            reason = "hybrid deterministic extraction does not require document-level schema guidance"
+        progress_message(f"Phase 1/3 skipped: {reason}")
     progress_message(
         f"Preparing index build for {len(documents)} source document(s) into {output_dir}"
     )
@@ -888,16 +1063,45 @@ def ensure_index(
         relation_hint_count=(guidance.relation_count if guidance else 0),
     )
     checkpoint_db = output_dir / CHECKPOINT_DB
-    if checkpoint_db.exists():
-        checkpoint_db.unlink()
+    conn = init_checkpoint_db(checkpoint_db)
+    doc_ids_by_path = {path.as_posix(): file_doc_id(path, input_dir) for path in documents}
+    pending = pending_documents(documents, doc_ids_by_path, conn)
+    resumed_documents = len(documents) - len(pending)
 
     progress_message("Phase 2/3: initializing property graph index and validating Ollama models")
-    index = _create_empty_index(schema_guided=schema_guided, validation_schema=(guidance.validation_schema if guidance else None))
+    if resumed_documents:
+        try:
+            index = _load_existing_index(
+                output_dir,
+                schema_guided=schema_guided,
+                use_umls=use_umls,
+                validation_schema=(guidance.validation_schema if guidance else None),
+            )
+            progress_message(
+                f"Phase 2/3 resume: reusing partial graph with {resumed_documents} completed document(s); "
+                f"{len(pending)} remaining"
+            )
+        except Exception as exc:
+            progress_message(
+                f"Phase 2/3 resume unavailable ({exc}); restarting Phase 3 from scratch"
+            )
+            conn.close()
+            checkpoint_db.unlink(missing_ok=True)
+            conn = init_checkpoint_db(checkpoint_db)
+            pending = documents
+            resumed_documents = 0
+            index = _create_empty_index(
+                schema_guided=schema_guided,
+                validation_schema=(guidance.validation_schema if guidance else None),
+            )
+    else:
+        index = _create_empty_index(
+            schema_guided=schema_guided,
+            validation_schema=(guidance.validation_schema if guidance else None),
+        )
     initial_counts = _graph_counts(index)
     if initial_counts is not None:
         progress_message(f"Phase 2/3 complete: initialized graph with {_format_graph_counts(initial_counts)}")
-    conn = init_checkpoint_db(checkpoint_db)
-    pending = documents
 
     if not pending:
         index.storage_context.persist(persist_dir=str(output_dir))
@@ -916,17 +1120,43 @@ def ensure_index(
         )
         return index
 
-    batches = [pending[i : i + batch_size] for i in range(0, len(pending), batch_size)]
     last_error: Exception | None = None
     last_error_traceback: str | None = None
     total_documents = len(documents)
-    processed_documents = 0
 
     for attempt in range(1, max_retries + 1):
         try:
+            pending = pending_documents(documents, doc_ids_by_path, conn)
+            processed_documents = total_documents - len(pending)
+            batches = [pending[i : i + batch_size] for i in range(0, len(pending), batch_size)]
+            if not pending:
+                index.storage_context.persist(persist_dir=str(output_dir))
+                manifest_path(output_dir).write_text(
+                    json.dumps(
+                        metadata_for_sources(
+                            input_dir,
+                            documents,
+                            schema_guided=schema_guided,
+                            use_umls=use_umls,
+                            guidance=guidance,
+                        ),
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                event_logger.event(
+                    "index_build",
+                    "completed",
+                    output_dir=output_dir,
+                    document_count=len(documents),
+                    schema_guided=schema_guided,
+                    umls_enabled=use_umls,
+                )
+                progress_message(f"Index build completed: {output_dir}")
+                return index
             progress_message(
                 f"Phase 3/3: indexing {total_documents} source document(s) "
-                f"across {len(batches)} batch(es)"
+                f"across {len(batches)} batch(es); {processed_documents} already complete"
             )
             progress_message(f"Index build attempt {attempt}/{max_retries}")
             for batch_number, batch in enumerate(
@@ -951,6 +1181,7 @@ def ensure_index(
                         path,
                         input_dir,
                         hint_block=(guidance.concept_hints_by_source.get(path.as_posix()) if guidance else None),
+                        doc_id=doc_ids_by_path[path.as_posix()],
                     )
                     for path in batch
                 ]
@@ -969,18 +1200,20 @@ def ensure_index(
                     source_name = doc.metadata.get("source_name")
                     processed_documents += 1
                     hint_count = 0
-                    concept_count = 0
-                    candidate_count = 0
+                    concept_count: int | None = None
+                    candidate_count: int | None = None
                     if guidance and source_path:
                         hint_count = 1 if guidance.concept_hints_by_source.get(source_path) else 0
                         candidate_count = guidance.candidate_count_by_source.get(source_path, 0)
                         concept_count = guidance.concept_count_by_source.get(source_path, 0)
-                    doc_started_at = time.perf_counter()
-                    graph_before = _graph_counts(index)
+                    if candidate_count is None or concept_count is None:
+                        count_suffix = "(hybrid extraction; schema hint counts=n/a)"
+                    else:
+                        count_suffix = f"(candidate_terms={candidate_count}, umls_concepts={concept_count})"
                     progress_message(
                         f"Indexing document {processed_documents}/{total_documents}: "
                         f"{source_name or doc.id_} "
-                        f"(candidate_terms={candidate_count}, umls_concepts={concept_count})"
+                        f"{count_suffix}"
                     )
                     event_logger.event(
                         "index_document",
@@ -995,6 +1228,8 @@ def ensure_index(
                         umls_concept_count=concept_count,
                         has_concept_hint=bool(hint_count),
                     )
+                    doc_started_at = time.perf_counter()
+                    graph_before = _graph_counts(index)
                     try:
                         index.insert(doc)
                     except Exception as exc:
@@ -1042,6 +1277,7 @@ def ensure_index(
                         graph_relationships=(graph_after.relation_count if graph_after else None),
                         graph_triplets=(graph_after.triplet_count if graph_after else None),
                     )
+                index.storage_context.persist(persist_dir=str(output_dir))
                 for doc in batch_docs:
                     mark_status(conn, doc.id_, "done")
                 progress_message(f"Indexed batch of {len(batch_docs)} document(s)")

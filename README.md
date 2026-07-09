@@ -1,6 +1,6 @@
 # Argumentation Schemes for Clinical Reasoning
 
-Clinical reasoning pipeline for diagnosis identification from MIMIC-IV discharge notes.
+Clinical reasoning pipeline for graph-backed recommendation experiments over MIMIC-IV discharge notes.
 
 Supporting documentation:
 
@@ -10,9 +10,9 @@ Supporting documentation:
 Workflow:
 
 1. download `MIMIC-IV-Note`
-2. extract the full discharge-note corpus into local `.txt` evidence files
-3. build the index
-4. run retrieval and reasoning
+2. extract or reuse a discharge-note `.txt` reservoir
+3. build or resume the index
+4. run retrieval, recommendation, and benchmarks
 
 ## Repository Layout
 
@@ -32,12 +32,16 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
+Commands below assume the repo-local interpreter `./venv/bin/python`. If you use another environment, replace it with `python`.
+
 Main runtime paths:
 
 ```text
-INPUT_BASE_DIR=data/evidence/mimic_discharge_full
+INPUT_BASE_DIR=data/evidence/mimic_discharge_subset
 OUTPUT_BASE_DIR=output
 ```
+
+The current repo-local extracted note reservoir is `data/evidence/mimic_discharge_subset`. For repeatable experiments, prefer explicit `--input-dir` and `--output-dir` values instead of relying on defaults.
 
 The required dataset is `MIMIC-IV-Note`. The repo can read either a plain CSV or a gzipped CSV. It checks common local paths automatically, including `data/mimic-iv-note-deidentified-free-text-clinical-notes-2.2/note/discharge.csv.gz`.
 
@@ -70,11 +74,11 @@ Build the local SQLite lookup before indexing:
 
 ```bash
 export UMLS_API_KEY=<your-umls-api-key>
-python scripts/download_umls.py
-python -m retrieval.concepts.local_umls build --meta-dir data/umls
+./venv/bin/python scripts/download_umls.py
+./venv/bin/python -m retrieval.concepts.local_umls build --meta-dir data/umls
 ```
 
-`python scripts/download_umls.py` uses the UTS Release API to resolve the current UMLS archive, downloads it through the UTS Download API, and extracts it under `data/umls`. Set `UMLS_API_KEY` in your environment first.
+`./venv/bin/python scripts/download_umls.py` uses the UTS Release API to resolve the current UMLS archive, downloads it through the UTS Download API, and extracts it under `data/umls`. Set `UMLS_API_KEY` in your environment first.
 The builder will auto-discover a nested `META` directory under the path you pass, so `data/umls`, `data/umls/META`, and versioned layouts such as `data/umls/2026AA/META` all work.
 
 If you prefer the remote UMLS API instead, set:
@@ -92,65 +96,122 @@ SHOW_PROGRESS=true
 
 ## Quick Start
 
-### 1. Extract Notes
+### 1. Reuse Or Extract The Source Note Reservoir
 
-Place the MIMIC-IV-Note discharge file in the repo, or keep the extracted PhysioNet folder as-is, then extract the full discharge-note corpus into plain text evidence files:
+If `data/evidence/mimic_discharge_subset` already exists, you can skip this step and reuse it directly.
 
-```bash
-python make_index.py extract-mimic-discharge --limit all --max-chars all
-```
-
-For quicker iteration, start with a smaller subset:
+To build the extracted note reservoir from the MIMIC discharge CSV:
 
 ```bash
-python make_index.py extract-mimic-discharge --limit 1000 --max-chars all
+./venv/bin/python make_index.py extract-mimic-discharge \
+  --input-dir data/evidence/mimic_discharge_subset \
+  --limit all \
+  --max-chars all
 ```
 
-### 2. Build The Index
+For quicker iteration, start with a smaller extracted source set:
 
 ```bash
-python make_index.py build
+./venv/bin/python make_index.py extract-mimic-discharge \
+  --input-dir data/evidence/mimic_discharge_subset_small \
+  --limit 1000 \
+  --max-chars all
 ```
 
-The build path uses the extracted full-note corpus for retrieval and applies UMLS concept normalization during graph construction. Local UMLS lookup is the default because it is practical for large corpora.
-
-### 3. Optional Schema-Guided Build
-
-Use the schema-guided graph only if you specifically want that build mode:
-
-```text
-UMLS_ENABLED=true
-UMLS_BACKEND=local
-```
-
-Command:
+If you want to enforce a hard `4000`-character extraction cap in a fresh source directory, do it here:
 
 ```bash
-python make_index.py build-schema
+./venv/bin/python make_index.py extract-mimic-discharge \
+  --input-dir data/evidence/mimic_discharge_4000 \
+  --limit all \
+  --max-chars 4000
 ```
 
-`build` and `build-schema` are alternatives, not a sequence.
+The `4000`-character cap only matters during extraction and other commands that re-read the source CSV. If you are indexing an already extracted `.txt` reservoir, that cap is not re-applied at index time.
 
-`build-schema` is substantially slower than `build`. On the full discharge-note corpus, start with a smaller extracted subset unless you already know you need the schema-guided graph.
-Schema guidance now caches per-document UMLS results on disk, so restarting the same `build-schema` command reuses completed unchanged notes instead of recomputing phase 1 from zero.
+Resume behavior:
 
-Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main schema-build tuning knobs: `UMLS_HINT_LIMIT`, `UMLS_GUIDANCE_NUM_WORKERS`, `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_SCHEMA_NUM_WORKERS`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`.
+- Extraction is rebuild-only in the current implementation.
+- Rerunning `extract-mimic-discharge` starts again from the source CSV and rewrites the target note files.
 
-### Run Retrieval Workflows
+### 2. Build Or Resume The Index
 
-Pipeline check:
+Use a dedicated output directory per build. Keep the directory if you want to resume. Delete it only when you intentionally want a clean restart.
+
+Deterministic UMLS graph build:
 
 ```bash
-python main.py pipeline-check \
+UMLS_ENABLED=true \
+INDEX_EMBED_KG_NODES=false \
+INDEX_UMLS_CANDIDATE_LIMIT=120 \
+INDEX_UMLS_MAX_CONCEPTS_PER_CHUNK=5 \
+./venv/bin/python make_index.py build \
+  --input-dir data/evidence/mimic_discharge_subset \
+  --output-dir output/mimic_umls
+```
+
+Hybrid graph build with schema LLM enrichment enabled:
+
+```bash
+INDEX_SCHEMA_LLM_ENRICH=true \
+UMLS_HINT_LIMIT=40 \
+INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK=4 \
+./venv/bin/python make_index.py build-schema \
+  --input-dir data/evidence/mimic_discharge_subset \
+  --output-dir output/mimic_schema
+```
+
+The default build path now creates a hybrid clinical graph:
+
+- note chunk nodes
+- normalized clinical entity nodes from local UMLS plus rule-based extraction
+- lab test and lab result nodes
+- medication action edges such as `HELD`, `RESTARTED`, `CONTINUED`, and `ADMINISTERED`
+- `MENTIONS`, `HAS_RESULT`, `TREATS`, and `CONTRAINDICATES` edges where supported by the chunk text
+
+`build` uses deterministic extraction only. `build-schema` uses the same deterministic base graph and adds schema-guided LLM relation extraction only when `INDEX_SCHEMA_LLM_ENRICH=true`.
+
+Resume behavior:
+
+- `build` and `build-schema` resume when you rerun them with the same `--input-dir` and `--output-dir` and keep the existing output directory.
+- Completed batches are persisted before they are marked done, so reruns continue from the last durable completed batch.
+- If you change graph-shaping settings such as `INDEX_SCHEMA_LLM_ENRICH`, `INDEX_EMBED_KG_NODES`, `UMLS_HINT_LIMIT`, or `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`, delete the old output directory and rebuild to avoid a mixed index.
+
+If you need a clean deterministic rebuild, clear only the persisted index artifacts and keep the UMLS cache:
+
+```bash
+rm -f output/mimic_umls/default__vector_store.json \
+  output/mimic_umls/docstore.json \
+  output/mimic_umls/graph_store.json \
+  output/mimic_umls/image__vector_store.json \
+  output/mimic_umls/index_checkpoints.sqlite \
+  output/mimic_umls/index_store.json \
+  output/mimic_umls/property_graph_store.json
+```
+
+Keep:
+
+- `output/cache/umls_local.sqlite3`
+- `output/schema_guidance.sqlite` if you may want to switch back to a schema-guided build later
+
+Inspect graph outputs with the visualization helpers and notebooks, especially [`umls_schema_comparison.ipynb`](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/umls_schema_comparison.ipynb:1). Main indexing tuning knobs: `INDEX_EMBED_KG_NODES`, `INDEX_HYBRID_CANDIDATE_LIMIT`, `INDEX_SCHEMA_LLM_ENRICH`, `UMLS_HINT_LIMIT`, `UMLS_GUIDANCE_NUM_WORKERS`, `INDEX_LLM_REQUEST_TIMEOUT`, `INDEX_EMBED_BATCH_SIZE`, `INDEX_SCHEMA_MAX_TRIPLETS_PER_CHUNK`, `INDEX_UMLS_CANDIDATE_LIMIT`, `INDEX_UMLS_MAX_CONCEPTS_PER_CHUNK`.
+
+### 3. Run Retrieval And Reasoning
+
+Single dry recommendation run:
+
+```bash
+INPUT_BASE_DIR=data/evidence/mimic_discharge_subset \
+OUTPUT_BASE_DIR=output/mimic_umls \
+./venv/bin/python main.py recommend \
   --scenario "A patient with chronic kidney disease and hypertension needs blood pressure management." \
-  --clinical-goal "reduce blood pressure while avoiding renal harm" \
   --dry-run
 ```
 
 Embedding benchmark:
 
 ```bash
-python main.py benchmark-embeddings \
+./venv/bin/python main.py benchmark-embeddings \
   --generation-model gemma4 \
   --embedding-model qwen3-embedding:0.6b \
   --embedding-model embeddinggemma:latest \
@@ -161,7 +222,7 @@ python main.py benchmark-embeddings \
 Generation benchmark:
 
 ```bash
-python main.py benchmark-models \
+./venv/bin/python main.py benchmark-models \
   --generation-model gemma4 \
   --generation-model qwen3.5:9b \
   --generation-model medgemma1.5 \
@@ -172,8 +233,10 @@ python main.py benchmark-models \
 API entrypoint:
 
 ```bash
-python main.py serve-api --reload
+./venv/bin/python main.py serve-api --reload
 ```
+
+This binds to `127.0.0.1:8000` by default. Use `--host 0.0.0.0` only if you intentionally want LAN access.
 
 ### Introduce Argumentation Frameworks
 
@@ -194,6 +257,12 @@ Main code:
 
 Background notes: [docs/framework_comparison.md](/Users/oluwatosinoso/Library/CloudStorage/OneDrive-hull.ac.uk/argumentation_schemes/docs/framework_comparison.md:1)
 
+## Extraction Notes
+
+- The current graph path is hybrid: deterministic clinical extraction first, local UMLS normalization second, optional schema-guided LLM relation enrichment last.
+- UMLS hints are now stored as metadata for the schema LLM path instead of being prepended into source text, which keeps chunk embeddings and retrieval text cleaner.
+- KG node embedding is disabled by default to reduce indexing cost when the graph contains many extracted entities and results. Enable it only when you explicitly want vector search over KG nodes.
+
 ## Logs and Records
 
 LlamaIndex writes its own internal index files under the configured output directory. The framework writes structured JSONL logs under:
@@ -204,8 +273,8 @@ LlamaIndex writes its own internal index files under the configured output direc
 Inspect records from the command line with:
 
 ```bash
-python -m eval.pull_records --run-id medqa_smoke
-python -m eval.pull_records --limit 5
+./venv/bin/python -m eval.pull_records --run-id medqa_smoke
+./venv/bin/python -m eval.pull_records --limit 5
 ```
 
 ## API
@@ -213,8 +282,10 @@ python -m eval.pull_records --limit 5
 Start the local read-only API with:
 
 ```bash
-python main.py serve-api --reload
+./venv/bin/python main.py serve-api --reload
 ```
+
+This uses `127.0.0.1:8000` by default. For LAN exposure, pass `--host 0.0.0.0`.
 
 Useful endpoints:
 
@@ -239,10 +310,7 @@ Sample request:
 curl -X POST http://127.0.0.1:8000/recommend \
   -H "Content-Type: application/json" \
   -d '{
-    "scenario": "A patient with chronic kidney disease and hypertension needs blood pressure management.",
-    "clinical_goal": "reduce blood pressure while avoiding renal harm",
-    "patient_id": "example-patient",
-    "max_rounds": 3
+    "scenario": "A patient with chronic kidney disease and hypertension needs blood pressure management."
   }'
 ```
 
@@ -262,4 +330,3 @@ Main notebooks:
 - `ollama_test.ipynb`: full-flow Ollama-backed property-graph test across generation and embedding combinations.
 - `ollama_benchmarks.ipynb`: combined embedding benchmark plus generation benchmark, reusing the shared embedding index cache between sections.
 - `umls_schema_comparison.ipynb`: comparison notebook for UMLS-first versus schema-guided graph construction and retrieval behavior.
-- `pipeline_check.ipynb`: end-to-end index and recommendation workflow check.

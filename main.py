@@ -10,7 +10,6 @@ from api.recommendation import RecommendationRequest, generate_recommendation
 from eval.embedding_benchmark import EmbeddingBenchmarkConfig, run_embedding_benchmark
 from eval.medqa_smoke import run_medqa_smoke_eval
 from eval.model_benchmark import ModelBenchmarkConfig, run_model_benchmark
-from eval.pipeline_check import run_pipeline_check
 from helpers.config import parse_optional_int, startup_check
 
 
@@ -21,7 +20,7 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("smoke-eval", help="Run the MedQA smoke evaluation.")
 
     serve_api = subparsers.add_parser("serve-api", help="Start the FastAPI server.")
-    serve_api.add_argument("--host", default="10.0.0.201")
+    serve_api.add_argument("--host", default="127.0.0.1")
     serve_api.add_argument("--port", type=int, default=8000)
     serve_api.add_argument("--reload", action="store_true")
 
@@ -56,13 +55,6 @@ def parse_args() -> argparse.Namespace:
     model_benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
     model_benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
     model_benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
-
-    pipeline = subparsers.add_parser("pipeline-check", help="Run an end-to-end pipeline smoke check.")
-    pipeline.add_argument("--scenario", required=True)
-    pipeline.add_argument("--clinical-goal", default=None)
-    pipeline.add_argument("--dry-run", action="store_true")
-    pipeline.add_argument("--use-umls", action="store_true")
-    pipeline.add_argument("--schema-guided", action="store_true")
 
     return parser.parse_args()
 
@@ -153,21 +145,6 @@ def main() -> None:
         )
         for result in results:
             print(result)
-        return
-
-    if command == "pipeline-check":
-        result = asyncio.run(
-            run_pipeline_check(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                scenario=args.scenario,
-                clinical_goal=args.clinical_goal,
-                use_umls=args.use_umls,
-                schema_guided=args.schema_guided,
-                dry_run=args.dry_run,
-            )
-        )
-        print(result)
         return
 
     raise ValueError(f"Unknown command: {command}")

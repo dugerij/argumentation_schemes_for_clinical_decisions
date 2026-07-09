@@ -4,6 +4,7 @@ import json
 import os
 import re
 from html import escape
+import mmap
 from pathlib import Path
 from typing import Iterable
 
@@ -57,6 +58,10 @@ GENERIC_ENTITY_TITLES = {
 
 ENTITY_COLUMNS = ("title", "type", "description", "frequency", "degree")
 RELATIONSHIP_COLUMNS = ("source", "target", "description", "weight", "combined_degree")
+PROPERTY_STORE_STREAM_THRESHOLD_BYTES = 250_000_000
+_TEXT_FIELD_PREFIX = b'"text":"'
+_HINT_TEXT_PREFIX = b'"text":"UMLS concept hints:'
+_SOURCE_NAME_PREFIX = b'"source_name":"'
 
 
 def _as_type_set(entity_types: Iterable[str] | None) -> set[str]:
@@ -150,6 +155,83 @@ def _ensure_graph_table_columns(frame: pd.DataFrame, columns: Iterable[str]) -> 
     return normalized.loc[:, list(columns)]
 
 
+def _update_hint_graph_records(
+    text: str,
+    source_name: str,
+    *,
+    entity_records: dict[str, dict[str, object]],
+    edge_records: dict[tuple[str, str], dict[str, object]],
+) -> None:
+    chunk_entities: list[str] = []
+    for line in text.splitlines():
+        match = UMLS_HINT_RE.match(line.strip())
+        if not match:
+            continue
+
+        title = match.group("title").strip()
+        entity_type = match.group("type").strip().upper()
+        source_vocabulary = match.group("source").strip()
+        if not _is_readable_entity_title(title, source_vocabulary):
+            continue
+        record = entity_records.setdefault(
+            title,
+            {
+                "title": title,
+                "type": entity_type,
+                "description": (
+                    f"CUI {match.group('cui')}; source {source_vocabulary}; "
+                    f"semantic type {match.group('semantic')}"
+                ),
+                "frequency": 0,
+                "degree": 0,
+            },
+        )
+        record["frequency"] = int(record["frequency"]) + 1
+        chunk_entities.append(title)
+
+    unique_titles = sorted(set(chunk_entities))
+    for index, source in enumerate(unique_titles):
+        for target in unique_titles[index + 1 :]:
+            key = (source, target)
+            edge = edge_records.setdefault(
+                key,
+                {
+                    "source": source,
+                    "target": target,
+                    "description": f"Co-mentioned in UMLS hints from {source_name}",
+                    "weight": 0.0,
+                    "combined_degree": 0,
+                },
+            )
+            edge["weight"] = float(edge["weight"]) + 1.0
+
+
+def _decode_json_string(buffer: mmap.mmap, start: int) -> tuple[str, int]:
+    cursor = start
+    escaped = False
+    while cursor < buffer.size():
+        byte = buffer[cursor]
+        if escaped:
+            escaped = False
+        elif byte == 0x5C:
+            escaped = True
+        elif byte == 0x22:
+            raw = bytes(buffer[start:cursor])
+            return json.loads(f'"{raw.decode("utf-8")}"'), cursor
+        cursor += 1
+    raise ValueError("Unterminated JSON string in property graph store.")
+
+
+def _source_name_before(buffer: mmap.mmap, text_field_pos: int, *, window: int = 16_384) -> str:
+    search_start = max(0, text_field_pos - window)
+    marker_pos = buffer.rfind(_SOURCE_NAME_PREFIX, search_start, text_field_pos)
+    if marker_pos == -1:
+        return "source chunk"
+    name_start = marker_pos + len(_SOURCE_NAME_PREFIX)
+    source_name, _ = _decode_json_string(buffer, name_start)
+    return source_name or "source chunk"
+
+
 def _load_parquet_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     entities_path = output_dir / "entities.parquet"
     relationships_path = output_dir / "relationships.parquet"
@@ -167,10 +249,56 @@ def _load_parquet_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return entities, relationships
 
 
-def _load_property_store_hint_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _load_property_store_hint_graph_streaming(output_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     store_path = output_dir / "property_graph_store.json"
     if not store_path.exists():
         raise FileNotFoundError(f"Missing LlamaIndex property graph store: {store_path}")
+
+    entity_records: dict[str, dict[str, object]] = {}
+    edge_records: dict[tuple[str, str], dict[str, object]] = {}
+    with store_path.open("rb") as file, mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as buffer:
+        search_pos = 0
+        while True:
+            text_field_pos = buffer.find(_HINT_TEXT_PREFIX, search_pos)
+            if text_field_pos == -1:
+                break
+            text_start = text_field_pos + len(_TEXT_FIELD_PREFIX)
+            text, text_end = _decode_json_string(buffer, text_start)
+            source_name = _source_name_before(buffer, text_field_pos)
+            _update_hint_graph_records(
+                text,
+                source_name,
+                entity_records=entity_records,
+                edge_records=edge_records,
+            )
+            search_pos = text_end + 1
+
+    for source, target in edge_records:
+        if source in entity_records:
+            entity_records[source]["degree"] = int(entity_records[source]["degree"]) + 1
+        if target in entity_records:
+            entity_records[target]["degree"] = int(entity_records[target]["degree"]) + 1
+
+    for edge in edge_records.values():
+        source_degree = int(entity_records[str(edge["source"])]["degree"])
+        target_degree = int(entity_records[str(edge["target"])]["degree"])
+        edge["combined_degree"] = source_degree + target_degree
+
+    entities = _ensure_graph_table_columns(pd.DataFrame(entity_records.values()), ENTITY_COLUMNS)
+    relationships = _ensure_graph_table_columns(pd.DataFrame(edge_records.values()), RELATIONSHIP_COLUMNS)
+    return entities, relationships
+
+
+def _load_property_store_hint_graph(
+    output_dir: Path,
+    *,
+    stream_threshold_bytes: int = PROPERTY_STORE_STREAM_THRESHOLD_BYTES,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    store_path = output_dir / "property_graph_store.json"
+    if not store_path.exists():
+        raise FileNotFoundError(f"Missing LlamaIndex property graph store: {store_path}")
+    if store_path.stat().st_size > stream_threshold_bytes:
+        return _load_property_store_hint_graph_streaming(output_dir)
 
     store = json.loads(store_path.read_text(encoding="utf-8"))
     entity_records: dict[str, dict[str, object]] = {}
@@ -181,48 +309,12 @@ def _load_property_store_hint_graph(output_dir: Path) -> tuple[pd.DataFrame, pd.
             continue
         text = str(node.get("text") or "")
         source_name = str((node.get("properties") or {}).get("source_name") or "source chunk")
-        chunk_entities = []
-        for line in text.splitlines():
-            match = UMLS_HINT_RE.match(line.strip())
-            if not match:
-                continue
-
-            title = match.group("title").strip()
-            entity_type = match.group("type").strip().upper()
-            source_vocabulary = match.group("source").strip()
-            if not _is_readable_entity_title(title, source_vocabulary):
-                continue
-            record = entity_records.setdefault(
-                title,
-                {
-                    "title": title,
-                    "type": entity_type,
-                    "description": (
-                        f"CUI {match.group('cui')}; source {source_vocabulary}; "
-                        f"semantic type {match.group('semantic')}"
-                    ),
-                    "frequency": 0,
-                    "degree": 0,
-                },
-            )
-            record["frequency"] = int(record["frequency"]) + 1
-            chunk_entities.append(title)
-
-        unique_titles = sorted(set(chunk_entities))
-        for index, source in enumerate(unique_titles):
-            for target in unique_titles[index + 1 :]:
-                key = (source, target)
-                edge = edge_records.setdefault(
-                    key,
-                    {
-                        "source": source,
-                        "target": target,
-                        "description": f"Co-mentioned in UMLS hints from {source_name}",
-                        "weight": 0.0,
-                        "combined_degree": 0,
-                    },
-                )
-                edge["weight"] = float(edge["weight"]) + 1.0
+        _update_hint_graph_records(
+            text,
+            source_name,
+            entity_records=entity_records,
+            edge_records=edge_records,
+        )
 
     for source, target in edge_records:
         if source in entity_records:
