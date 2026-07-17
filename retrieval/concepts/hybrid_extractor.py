@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import re
 from typing import Any
 
@@ -142,9 +140,13 @@ class HybridClinicalPathExtractor:
         *,
         umls_client: Any | None = None,
         candidate_limit: int = 24,
+        include_token_terms: bool = False,
+        max_umls_entities_per_call: int = 8,
     ) -> None:
         self.umls_client = umls_client
         self.candidate_limit = candidate_limit
+        self.include_token_terms = include_token_terms
+        self.max_umls_entities_per_call = max(1, max_umls_entities_per_call)
         self._lab_patterns = self._compile_lab_patterns()
 
     def __call__(self, nodes, **_: Any):
@@ -296,6 +298,7 @@ class HybridClinicalPathExtractor:
                 allowed_categories={"medication", "therapy_or_procedure"},
                 section=primary_section,
                 ensure_entity=ensure_entity,
+                include_token_terms=True,
             )
             if not sentence_medications:
                 continue
@@ -354,6 +357,7 @@ class HybridClinicalPathExtractor:
         allowed_categories: set[str],
         section: str | None,
         ensure_entity,
+        include_token_terms: bool | None = None,
     ) -> list[EntityNode]:
         if self.umls_client is None:
             return []
@@ -366,11 +370,14 @@ class HybridClinicalPathExtractor:
             for token in re.findall(r"\b[A-Za-z][A-Za-z0-9/-]{1,8}\b", text)
             if token.lower() in ABBREVIATION_EXPANSIONS
         ]
-        token_terms = [
-            token
-            for token in TOKEN_RE.findall(text)
-            if len(token) >= 5
-        ]
+        token_terms: list[str] = []
+        use_token_terms = self.include_token_terms if include_token_terms is None else include_token_terms
+        if use_token_terms:
+            token_terms = [
+                token
+                for token in TOKEN_RE.findall(text)
+                if len(token) >= 5
+            ]
         entities: list[EntityNode] = []
 
         for candidate in _dedupe_preserve_order([*abbreviation_terms, *token_terms, *candidates]):
@@ -388,6 +395,8 @@ class HybridClinicalPathExtractor:
                 category=concept.category,
             )
             entities.append(entity)
+            if len(entities) >= self.max_umls_entities_per_call:
+                break
 
         deduped: dict[str, EntityNode] = {}
         for entity in entities:

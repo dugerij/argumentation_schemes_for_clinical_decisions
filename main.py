@@ -1,101 +1,126 @@
 import argparse
 import asyncio
+import json
 import os
-import random
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from api.recommendation import RecommendationRequest, generate_recommendation
-from eval.embedding_benchmark import EmbeddingBenchmarkConfig, run_embedding_benchmark
-from eval.medqa_smoke import run_medqa_smoke_eval
-from eval.model_benchmark import ModelBenchmarkConfig, run_model_benchmark
-from helpers.config import parse_optional_int, startup_check
+from eval.case_eval import run_case_eval
+from helpers.config import startup_check
+from retrieval.cds_graph import build_cds_materialized_graph
+from retrieval.cds_query import SUPPORTED_CDS_TASKS
+
+
+SUPPORTED_DATASET_FORMATS = ("mimic_ext_cds",)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Clinical argumentation pipeline entrypoint.")
-    subparsers = parser.add_subparsers(dest="command", required=False)
+    parser = argparse.ArgumentParser(description="Graph-backed clinical argumentation pipeline.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("smoke-eval", help="Run the MedQA smoke evaluation.")
+    materialize_graph = subparsers.add_parser(
+        "materialize-graph",
+        help="Build a materialized case graph from a supported note-like dataset.",
+    )
+    materialize_graph.add_argument("--input-path", required=True)
+    materialize_graph.add_argument("--dataset-format", default="mimic_ext_cds", choices=SUPPORTED_DATASET_FORMATS)
+    materialize_graph.add_argument("--output-dir", default=None)
+    materialize_graph.add_argument("--no-overwrite", action="store_true")
+
+    answer_question = subparsers.add_parser(
+        "answer-question",
+        help="Answer one case question using the materialized graph and argumentation framework.",
+    )
+    answer_question.add_argument("--task", required=True, choices=SUPPORTED_CDS_TASKS)
+    answer_question.add_argument("--case-id", required=True, type=int)
+    answer_question.add_argument("--output-dir", default=None)
+    answer_question.add_argument("--question", default=None)
+    answer_question.add_argument("--clinical-goal", default=None)
+    answer_question.add_argument("--max-rounds", type=int, default=3)
+    answer_question.add_argument("--top-k-cases", type=int, default=5)
+    answer_question.add_argument("--dry-run", action="store_true")
+
+    evaluate = subparsers.add_parser(
+        "evaluate",
+        help="Run a small evaluation over cases in the materialized graph.",
+    )
+    evaluate.add_argument("--task", required=True, choices=SUPPORTED_CDS_TASKS)
+    evaluate.add_argument("--output-dir", default=None)
+    evaluate.add_argument("--sample-size", type=int, default=5)
+    evaluate.add_argument("--max-rounds", type=int, default=3)
+    evaluate.add_argument("--top-k-cases", type=int, default=5)
 
     serve_api = subparsers.add_parser("serve-api", help="Start the FastAPI server.")
     serve_api.add_argument("--host", default="127.0.0.1")
     serve_api.add_argument("--port", type=int, default=8000)
     serve_api.add_argument("--reload", action="store_true")
 
-    recommend = subparsers.add_parser("recommend", help="Run a single recommendation request.")
-    recommend.add_argument("--scenario", required=True)
-    recommend.add_argument("--clinical-goal", default=None)
-    recommend.add_argument("--patient-id", default=None)
-    recommend.add_argument("--max-rounds", type=int, default=3)
-    recommend.add_argument("--dry-run", action="store_true")
-    recommend.add_argument("--no-rag", action="store_true")
-
-    benchmark = subparsers.add_parser("benchmark-embeddings", help="Benchmark embedding models.")
-    benchmark.add_argument("--generation-model", required=True)
-    benchmark.add_argument("--embedding-model", action="append", dest="embedding_models", required=True)
-    benchmark.add_argument("--output-root", default="output/embedding_benchmark")
-    benchmark.add_argument("--sample-size", type=int, default=5)
-    benchmark.add_argument("--questions-path", default=None)
-    benchmark.add_argument("--use-umls", action="store_true")
-    benchmark.add_argument("--schema-guided", action="store_true")
-    benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
-    benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
-    benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
-
-    model_benchmark = subparsers.add_parser("benchmark-models", help="Benchmark generation models with a fixed embedding model.")
-    model_benchmark.add_argument("--generation-model", action="append", dest="generation_models", required=True)
-    model_benchmark.add_argument("--embedding-model", required=True)
-    model_benchmark.add_argument("--output-root", default="output/model_benchmark")
-    model_benchmark.add_argument("--sample-size", type=int, default=5)
-    model_benchmark.add_argument("--questions-path", default=None)
-    model_benchmark.add_argument("--use-umls", action="store_true")
-    model_benchmark.add_argument("--schema-guided", action="store_true")
-    model_benchmark.add_argument("--mimic-csv", default=os.environ.get("MIMIC_DISCHARGE_CSV"))
-    model_benchmark.add_argument("--note-limit", default=os.environ.get("MIMIC_DISCHARGE_LIMIT", "25"))
-    model_benchmark.add_argument("--note-max-chars", default=os.environ.get("MIMIC_DISCHARGE_MAX_CHARS", "all"))
-
     return parser.parse_args()
+
+
+def _output_dir_from_args(value: str | None) -> Path:
+    return Path(value or os.environ.get("OUTPUT_BASE_DIR", "output"))
+
+
+def _require_supported_dataset_format(dataset_format: str) -> None:
+    if dataset_format not in SUPPORTED_DATASET_FORMATS:
+        raise ValueError(f"Unsupported dataset format: {dataset_format}")
 
 
 def main() -> None:
     load_dotenv()
-    startup_check()
     args = parse_args()
 
-    command = args.command or "smoke-eval"
-
-    random.seed(int(os.environ.get("RANDOM_SEED", "42")))
-    sample_size = int(os.environ.get("EVAL_SAMPLE_SIZE", "1"))
-    input_dir = Path(os.environ["INPUT_BASE_DIR"])
-    output_dir = Path(os.environ["OUTPUT_BASE_DIR"])
-
-    if command == "smoke-eval":
-        asyncio.run(
-            run_medqa_smoke_eval(
-                input_dir=input_dir,
-                output_dir=output_dir,
-                sample_size=sample_size,
+    if args.command == "materialize-graph":
+        startup_check(require_models=False, require_paths=False)
+        _require_supported_dataset_format(args.dataset_format)
+        output_dir = _output_dir_from_args(args.output_dir)
+        stats = build_cds_materialized_graph(
+            zip_path=Path(args.input_path),
+            output_dir=output_dir,
+            overwrite=not args.no_overwrite,
+        )
+        print(
+            json.dumps(
+                {
+                    "artifact_path": stats.artifact_path,
+                    "manifest_path": stats.manifest_path,
+                    "case_count": stats.case_count,
+                    "diagnosis_case_count": stats.diagnosis_case_count,
+                    "triage_case_count": stats.triage_case_count,
+                    "specialty_case_count": stats.specialty_case_count,
+                    "token_count": stats.token_count,
+                    "build_seconds": stats.build_seconds,
+                    "artifact_bytes": stats.artifact_bytes,
+                },
+                indent=2,
             )
         )
         return
 
-    if command == "serve-api":
+    if args.command == "serve-api":
+        startup_check(require_models=True, require_paths=False)
         import uvicorn
 
         uvicorn.run("api.app:app", host=args.host, port=args.port, reload=args.reload)
         return
 
-    if command == "recommend":
+    startup_check(require_models=True, require_paths=False)
+    output_dir = _output_dir_from_args(getattr(args, "output_dir", None))
+    os.environ["OUTPUT_BASE_DIR"] = str(output_dir)
+
+    if args.command == "answer-question":
         result = asyncio.run(
             generate_recommendation(
                 RecommendationRequest(
-                    scenario=args.scenario,
+                    scenario=args.question,
+                    case_id=args.case_id,
+                    task=args.task,
                     clinical_goal=args.clinical_goal,
-                    patient_id=args.patient_id,
                     max_rounds=args.max_rounds,
-                    use_rag=not args.no_rag,
+                    top_k_cases=args.top_k_cases,
                     dry_run=args.dry_run,
                 )
             )
@@ -103,51 +128,39 @@ def main() -> None:
         print(result.model_dump_json(indent=2))
         return
 
-    if command == "benchmark-embeddings":
-        results = asyncio.run(
-            run_embedding_benchmark(
-                EmbeddingBenchmarkConfig(
-                    input_dir=input_dir,
-                    output_root=Path(args.output_root),
-                    generation_model=args.generation_model,
-                    embedding_models=tuple(args.embedding_models),
-                    use_umls=args.use_umls,
-                    schema_guided=args.schema_guided,
-                    mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),
-                    questions_path=(Path(args.questions_path) if args.questions_path else None),
-                    sample_size=args.sample_size,
-                    note_limit=parse_optional_int(args.note_limit, default=25),
-                    note_max_chars=parse_optional_int(args.note_max_chars, default=None),
-                )
+    if args.command == "evaluate":
+        summary = asyncio.run(
+            run_case_eval(
+                output_dir=output_dir,
+                task=args.task,
+                sample_size=args.sample_size,
+                max_rounds=args.max_rounds,
+                top_k_cases=args.top_k_cases,
             )
         )
-        for result in results:
-            print(result)
-        return
-
-    if command == "benchmark-models":
-        results = asyncio.run(
-            run_model_benchmark(
-                ModelBenchmarkConfig(
-                    input_dir=input_dir,
-                    output_root=Path(args.output_root),
-                    generation_models=tuple(args.generation_models),
-                    embedding_model=args.embedding_model,
-                    use_umls=args.use_umls,
-                    schema_guided=args.schema_guided,
-                    mimic_csv=(Path(args.mimic_csv) if args.mimic_csv else None),
-                    questions_path=(Path(args.questions_path) if args.questions_path else None),
-                    sample_size=args.sample_size,
-                    note_limit=parse_optional_int(args.note_limit, default=25),
-                    note_max_chars=parse_optional_int(args.note_max_chars, default=None),
-                )
+        print(
+            json.dumps(
+                {
+                    "task": summary.task,
+                    "sample_size": summary.sample_size,
+                    "correct_count": summary.correct_count,
+                    "accuracy": summary.accuracy,
+                    "records": [
+                        {
+                            "case_id": record.case_id,
+                            "expected_answer": record.expected_answer,
+                            "predicted_answer": record.predicted_answer,
+                            "correct": record.correct,
+                        }
+                        for record in summary.records
+                    ],
+                },
+                indent=2,
             )
         )
-        for result in results:
-            print(result)
         return
 
-    raise ValueError(f"Unknown command: {command}")
+    raise ValueError(f"Unknown command: {args.command}")
 
 
 if __name__ == "__main__":

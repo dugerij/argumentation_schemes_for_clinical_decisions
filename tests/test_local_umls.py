@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 from retrieval.concepts.local_umls import (
@@ -93,3 +94,44 @@ def _seed_meta_dir(tmp_path: Path) -> Path:
 
 def test_normalize_umls_term_collapses_punctuation():
     assert normalize_umls_term("Stage-2 Hypertension / Acute") == "stage 2 hypertension acute"
+
+
+def test_local_umls_persistent_lookup_cache_reuses_prior_result(tmp_path):
+    meta_dir = _seed_meta_dir(tmp_path)
+    db_path = tmp_path / "umls.sqlite3"
+    lookup_cache_path = tmp_path / "umls_lookup_cache.sqlite3"
+    build_local_umls_database(
+        LocalUMLSBuildConfig(
+            meta_dir=meta_dir,
+            db_path=db_path,
+            source_vocabularies=("SNOMEDCT_US",),
+        )
+    )
+
+    first_client = LocalUMLSClient(
+        db_path=db_path,
+        source_vocabularies=("SNOMEDCT_US",),
+        lookup_cache_db_path=lookup_cache_path,
+    )
+    first_match = first_client.best_match("hypertensive disorder")
+
+    with sqlite3.connect(lookup_cache_path) as conn:
+        rows = conn.execute(
+            "SELECT normalized_term, source_vocabularies FROM umls_lookup_cache"
+        ).fetchall()
+    assert rows == [("hypertensive disorder", "SNOMEDCT_US")]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM umls_terms")
+        conn.commit()
+
+    second_client = LocalUMLSClient(
+        db_path=db_path,
+        source_vocabularies=("SNOMEDCT_US",),
+        lookup_cache_db_path=lookup_cache_path,
+    )
+    second_match = second_client.best_match("hypertensive disorder")
+
+    assert first_match is not None
+    assert second_match is not None
+    assert second_match.cui == first_match.cui

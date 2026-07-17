@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 import argparse
 import json
+import os
 import re
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -15,6 +15,7 @@ from retrieval.concepts.schema import UMLSConcept
 from retrieval.concepts.vocabularies import SOURCE_PRIORITY, category_for
 
 DEFAULT_LOCAL_UMLS_DB_PATH = CACHE_ROOT / "umls_local.sqlite3"
+DEFAULT_LOCAL_UMLS_LOOKUP_CACHE_DB_PATH = CACHE_ROOT / "umls_local_lookup_cache.sqlite3"
 DEFAULT_LOCAL_UMLS_META_DIR = Path("data/umls/META")
 TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 
@@ -67,17 +68,49 @@ class LocalUMLSBuildConfig:
 
 
 class LocalUMLSClient:
-    def __init__(self, db_path: Path, source_vocabularies: tuple[str, ...] = SOURCE_PRIORITY):
+    def __init__(
+        self,
+        db_path: Path,
+        source_vocabularies: tuple[str, ...] = SOURCE_PRIORITY,
+        lookup_cache_db_path: Path | None = None,
+    ):
         self.db_path = Path(db_path)
         self.source_vocabularies = source_vocabularies
         self._search_cache: dict[tuple[str, tuple[str, ...] | None, int | None, str], list[UMLSConcept]] = {}
         self._best_match_cache: dict[tuple[str, tuple[str, ...] | None], UMLSConcept | None] = {}
         self._local = threading.local()
+        self._lookup_cache_enabled = os.environ.get("UMLS_LOCAL_LOOKUP_CACHE_ENABLED", "true").strip().lower() not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+        configured_lookup_cache = lookup_cache_db_path or Path(
+            os.environ.get("UMLS_LOCAL_LOOKUP_CACHE_DB_PATH", str(DEFAULT_LOCAL_UMLS_LOOKUP_CACHE_DB_PATH))
+        )
+        self.lookup_cache_db_path = Path(configured_lookup_cache)
         if not self.db_path.exists():
             raise FileNotFoundError(
                 f"Missing local UMLS database: {self.db_path}. "
                 "Build it first with `python -m retrieval.concepts.local_umls build`."
             )
+        if self._lookup_cache_enabled:
+            self.lookup_cache_db_path.parent.mkdir(parents=True, exist_ok=True)
+            with sqlite3.connect(self.lookup_cache_db_path) as conn:
+                conn.execute("PRAGMA journal_mode = WAL")
+                conn.execute("PRAGMA synchronous = NORMAL")
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS umls_lookup_cache (
+                        normalized_term TEXT NOT NULL,
+                        source_vocabularies TEXT NOT NULL,
+                        concept_json TEXT,
+                        updated_at REAL NOT NULL,
+                        PRIMARY KEY (normalized_term, source_vocabularies)
+                    )
+                    """
+                )
+                conn.commit()
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
@@ -90,6 +123,101 @@ class LocalUMLSClient:
             self._local.conn = conn
         return conn
 
+    def _get_lookup_cache_connection(self) -> sqlite3.Connection | None:
+        if not self._lookup_cache_enabled:
+            return None
+        conn = getattr(self._local, "lookup_cache_conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.lookup_cache_db_path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+            self._local.lookup_cache_conn = conn
+        return conn
+
+    def _sources_key(self, source_vocabularies: tuple[str, ...] | None) -> str:
+        sources = source_vocabularies or self.source_vocabularies
+        return ",".join(sources)
+
+    def _cache_key(self, term: str, source_vocabularies: tuple[str, ...] | None) -> tuple[str, tuple[str, ...] | None]:
+        normalized = normalize_umls_term(term)
+        sources = source_vocabularies or self.source_vocabularies
+        return normalized, tuple(sources) if sources else None
+
+    def _load_persistent_best_match(
+        self,
+        normalized_term: str,
+        source_vocabularies: tuple[str, ...] | None,
+    ) -> tuple[bool, UMLSConcept | None]:
+        conn = self._get_lookup_cache_connection()
+        if conn is None or not normalized_term:
+            return False, None
+
+        row = conn.execute(
+            """
+            SELECT concept_json
+            FROM umls_lookup_cache
+            WHERE normalized_term = ? AND source_vocabularies = ?
+            """,
+            (normalized_term, self._sources_key(source_vocabularies)),
+        ).fetchone()
+        if row is None:
+            return False, None
+        concept_json = row[0]
+        if not concept_json:
+            return True, None
+        payload = json.loads(concept_json)
+        return True, UMLSConcept(
+            cui=payload["cui"],
+            preferred_term=payload["preferred_term"],
+            semantic_type=payload["semantic_type"],
+            source_vocabulary=payload.get("source_vocabulary", "UMLS"),
+            source_code=payload.get("source_code"),
+            category=payload.get("category"),
+            aliases=tuple(payload.get("aliases", [])),
+            metadata=payload.get("metadata", {}),
+        )
+
+    def _store_persistent_best_match(
+        self,
+        normalized_term: str,
+        source_vocabularies: tuple[str, ...] | None,
+        concept: UMLSConcept | None,
+    ) -> None:
+        conn = self._get_lookup_cache_connection()
+        if conn is None or not normalized_term:
+            return
+
+        concept_json = None
+        if concept is not None:
+            concept_json = json.dumps(
+                to_jsonable(
+                    {
+                        "cui": concept.cui,
+                        "preferred_term": concept.preferred_term,
+                        "semantic_type": concept.semantic_type,
+                        "source_vocabulary": concept.source_vocabulary,
+                        "source_code": concept.source_code,
+                        "category": concept.category,
+                        "aliases": list(concept.aliases),
+                        "metadata": concept.metadata,
+                    }
+                ),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+
+        conn.execute(
+            """
+            INSERT INTO umls_lookup_cache(normalized_term, source_vocabularies, concept_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(normalized_term, source_vocabularies)
+            DO UPDATE SET concept_json = excluded.concept_json,
+                          updated_at = excluded.updated_at
+            """,
+            (normalized_term, self._sources_key(source_vocabularies), concept_json, time.time()),
+        )
+        conn.commit()
+
     def search(
         self,
         term: str,
@@ -97,11 +225,11 @@ class LocalUMLSClient:
         page_size: int | None = None,
         search_type: str = "words",
     ) -> list[UMLSConcept]:
-        cache_key = (term.strip().lower(), source_vocabularies, page_size, search_type)
+        normalized = normalize_umls_term(term)
+        cache_key = (normalized, source_vocabularies, page_size, search_type)
         if cache_key in self._search_cache:
             return self._search_cache[cache_key]
 
-        normalized = normalize_umls_term(term)
         if not normalized:
             self._search_cache[cache_key] = []
             return []
@@ -156,13 +284,24 @@ class LocalUMLSClient:
         term: str,
         source_vocabularies: tuple[str, ...] | None = None,
     ) -> UMLSConcept | None:
-        cache_key = (term.strip().lower(), source_vocabularies)
+        cache_key = self._cache_key(term, source_vocabularies)
         if cache_key in self._best_match_cache:
             return self._best_match_cache[cache_key]
+
+        normalized_term = cache_key[0]
+        if not normalized_term:
+            self._best_match_cache[cache_key] = None
+            return None
+
+        found, cached = self._load_persistent_best_match(normalized_term, source_vocabularies)
+        if found:
+            self._best_match_cache[cache_key] = cached
+            return cached
 
         matches = self.search(term, source_vocabularies=source_vocabularies, page_size=1)
         best = matches[0] if matches else None
         self._best_match_cache[cache_key] = best
+        self._store_persistent_best_match(normalized_term, source_vocabularies, best)
         return best
 
 

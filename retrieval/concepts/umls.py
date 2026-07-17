@@ -2,11 +2,16 @@ import os
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import requests
 
-from retrieval.concepts.local_umls import DEFAULT_LOCAL_UMLS_DB_PATH, LocalUMLSClient
+from retrieval.concepts.local_umls import (
+    DEFAULT_LOCAL_UMLS_DB_PATH,
+    DEFAULT_LOCAL_UMLS_LOOKUP_CACHE_DB_PATH,
+    LocalUMLSClient,
+)
 from retrieval.concepts.schema import UMLSConcept
 from retrieval.concepts.vocabularies import SOURCE_PRIORITY, category_for
 
@@ -188,6 +193,9 @@ def create_umls_client(config: UMLSConfig) -> UMLSClient | LocalUMLSClient:
         return LocalUMLSClient(
             db_path=config.local_db_path,
             source_vocabularies=config.source_vocabularies,
+            lookup_cache_db_path=Path(
+                os.environ.get("UMLS_LOCAL_LOOKUP_CACHE_DB_PATH", str(DEFAULT_LOCAL_UMLS_LOOKUP_CACHE_DB_PATH))
+            ),
         )
     if config.backend != "api":
         raise ValueError(f"Unsupported UMLS_BACKEND: {config.backend}")

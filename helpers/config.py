@@ -1,6 +1,5 @@
-import os
 import json
-from pathlib import Path
+import os
 
 from helpers.experiment_models import DEFAULT_EMBEDDING_MODEL, DEFAULT_GENERATION_MODEL
 
@@ -19,10 +18,6 @@ def _require_any(primary: str, fallback: str | None = None) -> None:
 def get_model_name(role: str) -> str:
     role = role.upper()
     return os.environ.get(f"{role}_MODEL") or os.environ[f"{role}_BASE_MODEL"]
-
-
-def umls_enabled() -> bool:
-    return os.environ.get("UMLS_ENABLED", "false").strip().lower() in TRUTHY
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -53,12 +48,8 @@ def env_optional_int(name: str, default: int | None = None) -> int | None:
 
 
 def startup_check(*, require_models: bool = True, require_paths: bool = True):
-    """"Checks that required environment variables are set and valid.
-    Raises:
-        ValueError: If any required environment variable is missing or invalid.
-    """
     if require_paths:
-        for var in ("INPUT_BASE_DIR", "OUTPUT_BASE_DIR"):
+        for var in ("OUTPUT_BASE_DIR",):
             if var not in os.environ:
                 raise ValueError(f"Missing required environment variable: {var}")
 
@@ -75,19 +66,6 @@ def startup_check(*, require_models: bool = True, require_paths: bool = True):
         _require_any('GENERATOR_MODEL', 'GENERATOR_BASE_MODEL')
         _require_any('VERIFIER_MODEL', 'VERIFIER_BASE_MODEL')
         _require_any('REASONER_MODEL', 'REASONER_BASE_MODEL')
-        if umls_enabled():
-            umls_backend = os.environ.get("UMLS_BACKEND", "local").strip().lower()
-            if umls_backend == "api" and not os.environ.get('UMLS_API_KEY'):
-                raise ValueError("UMLS_API_KEY must be set when UMLS_ENABLED=true and UMLS_BACKEND=api.")
-            if umls_backend == "local":
-                local_db_path = Path(os.environ.get("UMLS_LOCAL_DB_PATH", "output/cache/umls_local.sqlite3"))
-                if not local_db_path.exists():
-                    raise ValueError(
-                        f"Local UMLS database not found at {local_db_path}. "
-                        "Build it with `python -m retrieval.concepts.local_umls build` or set UMLS_BACKEND=api."
-                    )
-            if umls_backend not in {"api", "local"}:
-                raise ValueError("UMLS_BACKEND must be either 'api' or 'local'.")
 
         provider_vars = (
             'GENERATION_MODEL_PROVIDER',
