@@ -1,0 +1,10 @@
+{
+  "case_id": "local-case-001",
+  "sections": {
+    "chief_complaint": "Chest pain",
+    "history_of_present_illness": "Central pressure for two hours",
+    "past_medical_history": "Hypertension",
+    "physical_exam": "Blood pressure 174/102 mmHg",
+    "pertinent_results": "Troponin elevated"
+  }
+}

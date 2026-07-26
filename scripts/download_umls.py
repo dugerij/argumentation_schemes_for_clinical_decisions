@@ -26,7 +26,11 @@ def _find_first_download_url(payload: Any) -> str | None:
             if match:
                 return match
         return None
-    if isinstance(payload, str) and payload.startswith("https://download.nlm.nih.gov/") and payload.endswith(".zip"):
+    if (
+        isinstance(payload, str)
+        and payload.startswith("https://download.nlm.nih.gov/")
+        and payload.endswith(".zip")
+    ):
         return payload
     return None
 
@@ -92,12 +96,22 @@ def find_meta_dir(root: Path) -> Path | None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Download a UMLS release through the UTS Release/Download APIs.")
+    parser = argparse.ArgumentParser(
+        description="Download a UMLS release through the UTS APIs."
+    )
     parser.add_argument("--api-key", default=os.environ.get("UMLS_API_KEY"))
     parser.add_argument("--release-type", default=DEFAULT_RELEASE_TYPE)
-    parser.add_argument("--release-url", default=None, help="Optional direct NLM release zip URL. Skips Release API discovery.")
+    parser.add_argument(
+        "--release-url",
+        default=None,
+        help="Direct NLM release ZIP URL, bypassing release discovery.",
+    )
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
-    parser.add_argument("--zip-name", default=None, help="Optional zip filename to write under output-dir.")
+    parser.add_argument(
+        "--zip-name",
+        default=None,
+        help="ZIP filename written under the output directory.",
+    )
     parser.add_argument("--no-extract", action="store_true")
     parser.add_argument("--keep-zip", action="store_true")
     parser.add_argument("--current", action="store_true", default=True)
