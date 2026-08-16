@@ -67,18 +67,44 @@ def selected_phase() -> str:
     return phase
 
 
-RUN_SCOPE = selected_scope()
-RUN_CONFIG = selected_scope_config()
-RUN_ID = selected_run_id()
-RUN_PHASE = selected_phase()
-OUTPUT_TARGET = f"runs/{RUN_ID}"
-RUNTIME_SCRATCH_ROOT = f"/tmp/argumentation-schemes/{RUN_ID}"
+# RUN_SCOPE, RUN_CONFIG, RUN_ID, RUN_PHASE, OUTPUT_TARGET and RUNTIME_SCRATCH_ROOT all
+# depend on environment variables that a caller (job.prepare, job.run) sets before
+# importing this module. They are resolved lazily, on first attribute access, rather
+# than at import time: something that only needs SCOPES -- the notebook does, to list
+# the available scopes before it has chosen RUN_ID -- can import this module before
+# RUN_ID exists. A caller that does need one of them still sees the identical
+# ValueError, at the identical `from job.config import RUN_ID` line, because attribute
+# access is what triggers resolution.
+_RESOLVED: dict[str, object] = {}
+_LAZY_NAMES = frozenset(
+    {"RUN_SCOPE", "RUN_CONFIG", "RUN_ID", "RUN_PHASE", "OUTPUT_TARGET", "RUNTIME_SCRATCH_ROOT"}
+)
+
+
+def _resolved() -> dict[str, object]:
+    if not _RESOLVED:
+        run_id = selected_run_id()
+        _RESOLVED["RUN_SCOPE"] = selected_scope()
+        _RESOLVED["RUN_CONFIG"] = selected_scope_config()
+        _RESOLVED["RUN_ID"] = run_id
+        _RESOLVED["RUN_PHASE"] = selected_phase()
+        _RESOLVED["OUTPUT_TARGET"] = f"runs/{run_id}"
+        _RESOLVED["RUNTIME_SCRATCH_ROOT"] = f"/tmp/argumentation-schemes/{run_id}"
+    return _RESOLVED
+
+
+def __getattr__(name: str) -> object:
+    if name in _LAZY_NAMES:
+        return _resolved()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def validate_output_target(value: object) -> tuple[str, str]:
-    if not isinstance(value, str) or value != OUTPUT_TARGET:
-        raise ValueError(f"OUTPUT_TARGET must equal {OUTPUT_TARGET!r}.")
+    resolved = _resolved()
+    output_target = resolved["OUTPUT_TARGET"]
+    if not isinstance(value, str) or value != output_target:
+        raise ValueError(f"OUTPUT_TARGET must equal {output_target!r}.")
     parts = PurePosixPath(value).parts
-    if parts != ("runs", RUN_ID):
+    if parts != ("runs", resolved["RUN_ID"]):
         raise ValueError("OUTPUT_TARGET must be the canonical runs/<RUN_ID> path.")
     return parts
