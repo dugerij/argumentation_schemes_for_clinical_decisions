@@ -17,6 +17,27 @@ from clinical_cds.terminology.vocabularies import SOURCE_PRIORITY, category_for
 DEFAULT_LOCAL_UMLS_DB_PATH = Path("output/cache/umls_local.sqlite3")
 DEFAULT_LOCAL_UMLS_META_DIR = Path("data/umls/META")
 TOKEN_SPLIT_RE = re.compile(r"[^a-z0-9]+")
+_DATABASE_HASH_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def database_content_sha256(path: Path) -> str:
+    database_path = Path(path)
+    stat = database_path.stat()
+    cache_key = (
+        str(database_path.resolve()),
+        stat.st_size,
+        stat.st_mtime_ns,
+    )
+    cached = _DATABASE_HASH_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256()
+    with database_path.open("rb") as source:
+        while block := source.read(4 * 1024 * 1024):
+            digest.update(block)
+    value = digest.hexdigest()
+    _DATABASE_HASH_CACHE[cache_key] = value
+    return value
 
 
 def normalize_umls_term(term: str) -> str:
@@ -80,14 +101,7 @@ class LocalUMLSClient:
                 f"Missing local UMLS database: {self.db_path}. "
                 "Build it first with `python -m clinical_cds build-umls`."
             )
-        database_stat = self.db_path.stat()
-        database_identity = (
-            f"{self.db_path.resolve()}|"
-            f"{database_stat.st_size}|{database_stat.st_mtime_ns}"
-        )
-        self.database_id = hashlib.sha256(
-            database_identity.encode("utf-8")
-        ).hexdigest()[:16]
+        self.database_id = f"sha256:{database_content_sha256(self.db_path)}"
         self.source_vocabularies = source_vocabularies
         self._search_cache: dict[
             tuple[str, tuple[str, ...] | None, int | None, str],
@@ -146,11 +160,14 @@ class LocalUMLSClient:
     def _get_connection(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            database_uri = f"{self.db_path.resolve().as_uri()}?mode=ro"
+            conn = sqlite3.connect(
+                database_uri,
+                uri=True,
+                check_same_thread=False,
+            )
             conn.execute("PRAGMA query_only = ON")
             conn.execute("PRAGMA temp_store = MEMORY")
-            conn.execute("PRAGMA mmap_size = 268435456")
-            conn.execute("PRAGMA cache_size = -200000")
             self._local.conn = conn
         return conn
 
@@ -633,7 +650,82 @@ def build_local_umls_database(config: LocalUMLSBuildConfig) -> Path:
             """
         )
         conn.commit()
-        conn.execute("ANALYZE")
+        conn.execute("ANALYZE main")
         conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("PRAGMA journal_mode = DELETE")
 
     return config.db_path
+
+
+def build_local_umls_subset(
+    source_db_path: Path,
+    db_path: Path,
+    terms: Iterable[str],
+) -> Path:
+    """Create a compact runtime database for the study's known UMLS terms."""
+    source = Path(source_db_path)
+    destination = Path(db_path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Missing full local UMLS database: {source}")
+    normalized_terms = sorted({
+        normalized
+        for term in terms
+        if (normalized := normalize_umls_term(term))
+    })
+    if not normalized_terms:
+        raise ValueError("At least one non-empty UMLS subset term is required.")
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists():
+        destination.unlink()
+    with sqlite3.connect(destination) as conn:
+        _ensure_schema(conn)
+        conn.execute("ATTACH DATABASE ? AS full_umls", (str(source.resolve()),))
+        conn.execute("CREATE TEMP TABLE requested_terms(term TEXT PRIMARY KEY)")
+        conn.executemany(
+            "INSERT INTO requested_terms(term) VALUES (?)",
+            ((term,) for term in normalized_terms),
+        )
+        conn.execute(
+            """
+            CREATE TEMP TABLE selected_cuis AS
+            SELECT DISTINCT cui FROM full_umls.umls_terms
+            WHERE normalized_term IN (SELECT term FROM requested_terms)
+            """
+        )
+        if conn.execute("SELECT COUNT(*) FROM selected_cuis").fetchone()[0] == 0:
+            raise ValueError("None of the requested terms matched the local UMLS index.")
+        conn.execute(
+            """
+            INSERT INTO umls_semantic_types(cui, semantic_type, category)
+            SELECT cui, semantic_type, category FROM full_umls.umls_semantic_types
+            WHERE cui IN (SELECT cui FROM selected_cuis)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO umls_preferred_terms(cui, source_vocabulary, preferred_term)
+            SELECT cui, source_vocabulary, preferred_term
+            FROM full_umls.umls_preferred_terms
+            WHERE cui IN (SELECT cui FROM selected_cuis)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO umls_terms(
+                cui, normalized_term, term, preferred_term, semantic_type,
+                source_vocabulary, source_code, category, is_preferred, source_rank
+            )
+            SELECT
+                cui, normalized_term, term, preferred_term, semantic_type,
+                source_vocabulary, source_code, category, is_preferred, source_rank
+            FROM full_umls.umls_terms
+            WHERE cui IN (SELECT cui FROM selected_cuis)
+            """
+        )
+        conn.commit()
+        conn.execute("ANALYZE main")
+        conn.execute("DETACH DATABASE full_umls")
+        conn.execute("PRAGMA journal_mode = DELETE")
+    return destination

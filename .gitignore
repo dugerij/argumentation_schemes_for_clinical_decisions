@@ -24,6 +24,18 @@ env/
 .vscode/
 .ipynb_checkpoints/
 .jupyter/
+.claude/
+
+# Research notes, thesis drafts, and experiment tracking.
+# This repo ships working code; process/history notes stay local.
+ledger.md
+literature-evidence-matrix.md
+modified-proposal-text.txt
+submission-notebook-plan.md
+thesis-working-pack.md
+build_thesis_doc.py
+msc-*.md
+msc-*.docx
 
 # Licensed clinical and terminology data
 data/
@@ -37,6 +49,9 @@ output/
 cache/
 logs/
 runs/
+work/
+.local-history/
+.hf-runs/
 *.parquet
 *.graphml
 *.lance
@@ -49,7 +64,6 @@ runs/
 models/
 checkpoints/
 .huggingface/
-huggingface/
 wandb/
 mlruns/
 *.gguf

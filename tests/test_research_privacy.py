@@ -21,6 +21,8 @@ def test_direct_rejects_cloud_named_model():
         model.assert_data_boundary("direct")
 
 
-def test_medqa_allows_remote_model_boundary():
+def test_dataset_outside_the_protected_set_allows_remote_model_boundary():
+    # Only "direct" and "submitted_patient" carry patient data today and are
+    # restricted to a local model; any other dataset label is unaffected.
     model = OllamaDiagnosticModel(model_name="example:cloud")
-    model.assert_data_boundary("medqa")
+    model.assert_data_boundary("unrestricted_dataset")

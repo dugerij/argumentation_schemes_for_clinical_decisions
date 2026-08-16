@@ -1,328 +1,124 @@
+from dataclasses import replace
+
 from clinical_cds.argumentation import (
-    ArgumentScheme,
-    RelationType,
-    build_patient_argument_graph,
-    parse_reasoner_proposal,
-    parse_verifier_report,
-    resolve_argument_graph,
-    verifier_output_schema,
+    KnowledgeRole,
+    family_candidate_inventory_entries,
+    family_entailment_shortlist,
+    knowledge_claims,
+    knowledge_role,
 )
 from clinical_cds.direct import load_direct_dataset
-from clinical_cds.retrieval import KnowledgeRetriever, section_evidence
+from clinical_cds.schema import (
+    FamilyChildFact,
+    FamilyDiagnosisAlternative,
+    RetrievedFact,
+    RetrievedFamilyRoute,
+)
 
 
-def _proposal_payload():
-    return {
-        "candidates": [
-            {
-                "diagnosis": "Hypertension",
-                "arguments": [
-                    {
-                        "scheme": "argument_from_diagnostic_criterion",
-                        "premise": "Repeated blood pressure satisfies the criterion.",
-                        "evidence_ids": ["S-PE", "K1"],
-                    }
-                ],
-            },
-            {
-                "diagnosis": "Suspected Hypertension",
-                "arguments": [
-                    {
-                        "scheme": "argument_from_risk_factor",
-                        "premise": "Family history increases prior plausibility.",
-                        "evidence_ids": ["S-FH", "K2"],
-                    }
-                ],
-            },
-        ],
-        "preferred_diagnosis": "Suspected Hypertension",
-        "abstain": False,
-    }
+def test_knowledge_roles_preserve_diagnostic_authority():
+    assert knowledge_role("Diagnostic Criteria") == KnowledgeRole.DIAGNOSTIC_CRITERION
+    assert knowledge_role("Clinical Features") == KnowledgeRole.CLINICAL_FEATURE
+    assert knowledge_role("Risk Factors") == KnowledgeRole.RISK_FACTOR
+    assert knowledge_role("Guideline") == KnowledgeRole.GUIDELINE
 
 
-def _verifier_payload(first_verdict="supported"):
-    return {
-        "reviews": [
-            {
-                "argument_id": "A1",
-                "verdict": first_verdict,
-                "failed_critical_questions": (
-                    [] if first_verdict == "supported" else ["criterion_satisfied"]
-                ),
-                "explanation": "Criterion checked.",
-                "evidence_ids": ["S-PE", "K1"],
-            },
-            {
-                "argument_id": "A2",
-                "verdict": "supported",
-                "failed_critical_questions": [],
-                "explanation": "Risk factor is treated as prior evidence.",
-                "evidence_ids": ["S-FH", "K2"],
-            },
-        ],
-        "counterarguments": [],
-        "abstain": False,
-    }
-
-
-def _knowledge_support(bundle):
-    return {
-        fact.evidence_id: (
-            fact.diagnosis_label,
-            *fact.diagnostic_path,
-        )
-        for fact in bundle.facts
-    }
-
-
-def _build(direct_root, first_verdict="supported"):
-    dataset = load_direct_dataset(direct_root)
-    case = dataset.cases[0]
-    bundle = KnowledgeRetriever(dataset.graphs).retrieve(case, top_k=3)
-    proposal = parse_reasoner_proposal(_proposal_payload(), case)
-    verifier = parse_verifier_report(
-        _verifier_payload(first_verdict),
-        proposal,
-    )
-    valid_ids = tuple(item[0] for item in section_evidence(case)) + bundle.evidence_ids
-    graph = build_patient_argument_graph(
-        case_id=case.case_id,
-        proposal=proposal,
-        verifier=verifier,
-        valid_evidence_ids=valid_ids,
-        knowledge_support=_knowledge_support(bundle),
-    )
-    return proposal, verifier, graph
-
-
-def test_argument_graph_contains_best_explanation_support_and_rebuttal(
-    direct_root,
-):
-    proposal, verifier, graph = _build(direct_root)
-
-    assert graph.quality.argument_schema_validity == 1.0
-    assert graph.quality.argument_evidence_validity == 1.0
-    assert graph.quality.verifier_review_coverage == 1.0
-    assert {
-        node.scheme
-        for node in graph.nodes
-        if node.node_type == "diagnosis"
-    } == {ArgumentScheme.BEST_EXPLANATION}
-    assert any(
-        relation.relation == RelationType.SUPPORTS
-        for relation in graph.relations
-    )
-    assert any(
-        relation.relation == RelationType.REBUTS
-        for relation in graph.relations
+def test_knowledge_claims_retain_graph_provenance():
+    fact = RetrievedFact(
+        evidence_id="K1",
+        node_id="node-1",
+        category="Pneumonia",
+        diagnosis_label="Bacterial Pneumonia",
+        premise_type="Diagnostic Criteria",
+        text="A pulmonary infiltrate with fever supports pneumonia.",
+        score=1.0,
+        diagnostic_path=("Pneumonia", "Bacterial Pneumonia"),
+        source_chunk_id="source-chunk:" + "1" * 20,
     )
 
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-    assert resolution.selected_diagnosis == "Hypertension"
-    assert resolution.abstained is False
-    assert "D1" in resolution.accepted_argument_ids
-    assert "D2" in resolution.rejected_argument_ids
+    claim = knowledge_claims((fact,))[0]
+
+    assert claim.evidence_id == "K1"
+    assert claim.node_id == "node-1"
+    assert claim.role == KnowledgeRole.DIAGNOSTIC_CRITERION
+    assert claim.diagnostic_path == ("Pneumonia", "Bacterial Pneumonia")
 
 
-def test_verifier_schema_is_restricted_to_proposed_identifiers(direct_root):
-    dataset = load_direct_dataset(direct_root)
-    proposal = parse_reasoner_proposal(
-        _proposal_payload(),
-        dataset.cases[0],
+def test_family_inventory_uses_one_slot_and_keeps_child_warrants(direct_root):
+    case = replace(load_direct_dataset(direct_root).cases[0], options={})
+    facts = (
+        RetrievedFact(
+            "K1", "node-nstemi", "ACS", "NSTEMI", "Diagnostic Criteria",
+            "Troponin rise without ST elevation supports NSTEMI.", 1.0,
+            ("Suspected ACS", "NSTE-ACS", "NSTEMI"),
+            source_chunk_id="source-chunk:" + "1" * 20,
+        ),
+        RetrievedFact(
+            "K2", "node-ua", "ACS", "UA", "Diagnostic Criteria",
+            "Ischemia without biomarker rise supports UA.", 0.8,
+            ("Suspected ACS", "NSTE-ACS", "UA"),
+            source_chunk_id="source-chunk:" + "2" * 20,
+        ),
+    )
+    route = RetrievedFamilyRoute(
+        family_rank=1,
+        graph_id="direct:acs",
+        family_key="graph:direct:acs",
+        representative_diagnosis="NSTEMI",
+        alternatives=tuple(
+            FamilyDiagnosisAlternative(
+                candidate_id=f"candidate:{label.casefold()}",
+                diagnosis_label=label,
+                graph_id="direct:acs",
+                diagnostic_path=fact.diagnostic_path,
+                source_chunk_ids=(fact.source_chunk_id,),
+                original_candidate_rank=index,
+                representative=index == 1,
+            )
+            for index, (label, fact) in enumerate(
+                (("NSTEMI", facts[0]), ("UA", facts[1])), 1
+            )
+        ),
     )
 
-    schema = verifier_output_schema(proposal)
-    properties = schema["properties"]
-    reviews = properties["reviews"]
-    review_ids = reviews["items"]["properties"]["argument_id"]["enum"]
-    target_ids = (
-        properties["counterarguments"]["items"]["properties"]
-        ["target_argument_id"]["enum"]
+    inventory = family_candidate_inventory_entries(
+        case, facts, family_routes=(route,)
     )
 
-    assert reviews["minItems"] == 2
-    assert reviews["maxItems"] == 2
-    assert review_ids == ["A1", "A2"]
-    assert target_ids == ["D1", "D2", "A1", "A2"]
+    assert len(inventory) == 1
+    assert inventory[0].diagnosis == "ACS"
+    assert inventory[0].evidence_ids == ("K1", "K2")
+    assert inventory[0].graph_id == "direct:acs"
 
 
-def test_risk_factor_alone_cannot_survive_failed_diagnostic_support(
-    direct_root,
-):
-    proposal, verifier, graph = _build(
-        direct_root,
-        first_verdict="undercut",
+def test_entailment_shortlist_is_family_local_and_safety_filtered():
+    facts = (
+        FamilyChildFact("graph:pneumonia", RetrievedFact(
+            "KF1", "n1", "Pneumonia", "Bacterial Pneumonia",
+            "Diagnostic Criteria", "Fever with a pulmonary infiltrate.",
+            0.0, ("Pneumonia", "Bacterial Pneumonia"),
+        )),
+        FamilyChildFact("graph:pneumonia", RetrievedFact(
+            "KF2", "n2", "Pneumonia", "Bacterial Pneumonia",
+            "Diagnostic Criteria", "Family history increases probability.",
+            0.0, ("Pneumonia", "Bacterial Pneumonia"),
+        )),
+        FamilyChildFact("graph:pneumonia", RetrievedFact(
+            "KF3", "n3", "Pneumonia", "Viral Pneumonia",
+            "Diagnostic Criteria", "No focal pulmonary infiltrate.",
+            0.0, ("Pneumonia", "Viral Pneumonia"),
+        )),
+        FamilyChildFact("graph:pe", RetrievedFact(
+            "KF4", "n4", "Pulmonary Embolism", "Low-risk PE",
+            "Diagnostic Criteria", "CT pulmonary angiography shows embolus.",
+            0.0, ("Pulmonary Embolism", "Low-risk PE"),
+        )),
     )
 
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-
-    assert any(
-        relation.source_id == "Q-A1"
-        and relation.target_id == "A1"
-        and relation.relation == RelationType.UNDERCUTS
-        for relation in graph.relations
-    )
-    assert "A1" in resolution.rejected_argument_ids
-    assert resolution.selected_diagnosis == ""
-    assert resolution.abstained is True
-
-
-def test_invalid_evidence_identifier_is_rejected(direct_root):
-    payload = _proposal_payload()
-    payload["candidates"][0]["arguments"][0]["evidence_ids"] = [
-        "S-PE",
-        "K999",
-    ]
-    dataset = load_direct_dataset(direct_root)
-    case = dataset.cases[0]
-    bundle = KnowledgeRetriever(dataset.graphs).retrieve(case, top_k=3)
-    proposal = parse_reasoner_proposal(payload, case)
-    verifier = parse_verifier_report(_verifier_payload(), proposal)
-    graph = build_patient_argument_graph(
-        case_id=case.case_id,
-        proposal=proposal,
-        verifier=verifier,
-        valid_evidence_ids=tuple(
-            item[0] for item in section_evidence(case)
-        )
-        + bundle.evidence_ids,
-        knowledge_support=_knowledge_support(bundle),
-    )
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-
-    assert graph.quality.argument_evidence_validity == 0.5
-    assert "A1" in resolution.rejected_argument_ids
-    assert resolution.selected_diagnosis == ""
-    assert resolution.abstained is True
-
-
-def test_verifier_counterargument_blocks_candidate_diagnosis(direct_root):
-    dataset = load_direct_dataset(direct_root)
-    case = dataset.cases[0]
-    bundle = KnowledgeRetriever(dataset.graphs).retrieve(case, top_k=3)
-    proposal = parse_reasoner_proposal(_proposal_payload(), case)
-    verifier_payload = _verifier_payload()
-    verifier_payload["counterarguments"] = [
-        {
-            "target_argument_id": "D1",
-            "scheme": "argument_from_negative_evidence",
-            "premise": "The submitted history contains evidence against the conclusion.",
-            "conclusion": "Hypertension is not established.",
-            "evidence_ids": ["S-PMH", "K1"],
-            "relation": "undercuts",
-        }
-    ]
-    verifier = parse_verifier_report(verifier_payload, proposal)
-    graph = build_patient_argument_graph(
-        case_id=case.case_id,
-        proposal=proposal,
-        verifier=verifier,
-        valid_evidence_ids=tuple(
-            item[0] for item in section_evidence(case)
-        )
-        + bundle.evidence_ids,
-        knowledge_support=_knowledge_support(bundle),
+    selected = family_entailment_shortlist(
+        (("S-HPI", "Current fever with a new pulmonary infiltrate."),),
+        facts,
+        maximum_per_family=2,
     )
 
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-
-    assert "C1" in resolution.accepted_argument_ids
-    assert "D1" in resolution.rejected_argument_ids
-    assert resolution.abstained is True
-
-
-def test_duplicate_evidence_does_not_inflate_scheme_score(direct_root):
-    payload = _proposal_payload()
-    payload["candidates"][0]["arguments"].append(
-        {
-            "scheme": "argument_from_diagnostic_criterion",
-            "premise": "The same repeated blood pressure satisfies the criterion.",
-            "evidence_ids": ["S-PE", "K1"],
-        }
-    )
-    verifier_payload = _verifier_payload()
-    verifier_payload["reviews"].insert(
-        1,
-        {
-            "argument_id": "A2",
-            "verdict": "supported",
-            "failed_critical_questions": [],
-            "explanation": "Duplicate criterion support.",
-            "evidence_ids": ["S-PE", "K1"],
-        },
-    )
-    verifier_payload["reviews"][2]["argument_id"] = "A3"
-
-    dataset = load_direct_dataset(direct_root)
-    case = dataset.cases[0]
-    bundle = KnowledgeRetriever(dataset.graphs).retrieve(case, top_k=3)
-    proposal = parse_reasoner_proposal(payload, case)
-    verifier = parse_verifier_report(verifier_payload, proposal)
-    graph = build_patient_argument_graph(
-        case_id=case.case_id,
-        proposal=proposal,
-        verifier=verifier,
-        valid_evidence_ids=tuple(
-            item[0] for item in section_evidence(case)
-        )
-        + bundle.evidence_ids,
-        knowledge_support=_knowledge_support(bundle),
-    )
-
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-
-    assert resolution.candidate_scores["D1"] == 4
-
-
-def test_valid_but_diagnostically_unrelated_knowledge_is_rejected(direct_root):
-    payload = {
-        "candidates": [
-            {
-                "diagnosis": "Asthma",
-                "arguments": [
-                    {
-                        "scheme": "argument_from_diagnostic_criterion",
-                        "premise": "The finding is presented as an asthma criterion.",
-                        "evidence_ids": ["S-PE", "K1"],
-                    }
-                ],
-            }
-        ],
-        "preferred_diagnosis": "Asthma",
-        "abstain": False,
-    }
-    verifier_payload = {
-        "reviews": [
-            {
-                "argument_id": "A1",
-                "verdict": "supported",
-                "failed_critical_questions": [],
-                "explanation": "The supplied identifiers exist.",
-                "evidence_ids": ["S-PE", "K1"],
-            }
-        ],
-        "counterarguments": [],
-        "abstain": False,
-    }
-    dataset = load_direct_dataset(direct_root)
-    case = dataset.cases[0]
-    bundle = KnowledgeRetriever(dataset.graphs).retrieve(case, top_k=3)
-    proposal = parse_reasoner_proposal(payload, case)
-    verifier = parse_verifier_report(verifier_payload, proposal)
-    graph = build_patient_argument_graph(
-        case_id=case.case_id,
-        proposal=proposal,
-        verifier=verifier,
-        valid_evidence_ids=tuple(
-            item[0] for item in section_evidence(case)
-        )
-        + bundle.evidence_ids,
-        knowledge_support=_knowledge_support(bundle),
-    )
-
-    resolution = resolve_argument_graph(graph, proposal, verifier)
-
-    assert graph.quality.valid_evidence_reference_fraction == 1.0
-    assert graph.quality.argument_evidence_validity == 0.0
-    assert "A1" in resolution.rejected_argument_ids
-    assert resolution.abstained is True
+    assert [item.fact.evidence_id for item in selected] == ["KF1", "KF4"]

@@ -1,0 +1,126 @@
+{
+  "extension_id": "gastritis-kg-extension-v1",
+  "category": "Gastritis",
+  "created_for": "DiReCT category with patient cases but no supplied diagnostic graph",
+  "sources": {
+    "NIDDK-DEFINITION": {
+      "title": "Definition & Facts for Gastritis & Gastropathy",
+      "url": "https://www.niddk.nih.gov/health-information/digestive-diseases/gastritis-gastropathy/definition-facts",
+      "publisher": "National Institute of Diabetes and Digestive and Kidney Diseases",
+      "last_reviewed": "2019-08"
+    },
+    "NIDDK-SYMPTOMS": {
+      "title": "Symptoms & Causes of Gastritis & Gastropathy",
+      "url": "https://www.niddk.nih.gov/health-information/digestive-diseases/gastritis-gastropathy/symptoms-causes",
+      "publisher": "National Institute of Diabetes and Digestive and Kidney Diseases",
+      "last_reviewed": "2019-08"
+    },
+    "NIDDK-DIAGNOSIS": {
+      "title": "Diagnosis of Gastritis & Gastropathy",
+      "url": "https://www.niddk.nih.gov/health-information/digestive-diseases/gastritis-gastropathy/diagnosis",
+      "publisher": "National Institute of Diabetes and Digestive and Kidney Diseases",
+      "last_reviewed": "2019-08"
+    },
+    "AGA-ATROPHIC": {
+      "title": "Diagnosis and management of atrophic gastritis",
+      "url": "https://gastro.org/clinical-guidance/diagnosis-and-management-of-atrophic-gastritis/",
+      "publisher": "American Gastroenterological Association",
+      "guidance_type": "Clinical Practice Update"
+    }
+  },
+  "claims": [
+    {
+      "text": "Many patients have no symptoms",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Upper abdominal pain or discomfort",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Nausea or vomiting",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Early satiety or excessive fullness after eating",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Loss of appetite or weight loss",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Black or tarry stool, blood or coffee-ground material in vomit, fatigue, dyspnea, or light-headedness may indicate gastric bleeding",
+      "source_ids": ["NIDDK-SYMPTOMS"]
+    },
+    {
+      "text": "Helicobacter pylori infection",
+      "source_ids": ["NIDDK-SYMPTOMS", "NIDDK-DEFINITION", "AGA-ATROPHIC"]
+    },
+    {
+      "text": "Long-term exposure to NSAIDs, alcohol, or bile reflux",
+      "source_ids": ["NIDDK-SYMPTOMS", "NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Autoimmune disease",
+      "source_ids": ["NIDDK-SYMPTOMS", "NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Critical illness, sepsis, severe injury, or burns",
+      "source_ids": ["NIDDK-SYMPTOMS", "NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Upper gastrointestinal endoscopy with gastric biopsies can diagnose gastritis, determine its cause, and assess complications",
+      "source_ids": ["NIDDK-DIAGNOSIS"]
+    },
+    {
+      "text": "Stool antigen or urea breath testing can identify Helicobacter pylori infection",
+      "source_ids": ["NIDDK-DIAGNOSIS"]
+    },
+    {
+      "text": "Acute gastritis develops suddenly and lasts a short time",
+      "source_ids": ["NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Gastric biopsy must show inflammation rather than mucosal injury with little or no inflammation",
+      "source_ids": ["NIDDK-DEFINITION", "NIDDK-DIAGNOSIS"]
+    },
+    {
+      "text": "Chronic gastritis develops slowly and lasts a long time",
+      "source_ids": ["NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Helicobacter pylori and autoimmune gastritis are common chronic forms",
+      "source_ids": ["NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Gastric histology shows chronic inflammation without the gland loss or intestinal metaplasia that defines atrophic gastritis",
+      "source_ids": ["AGA-ATROPHIC"],
+      "derivation": "Non-atrophic branch is the explicit complement of the AGA histopathologic definition of atrophic gastritis."
+    },
+    {
+      "text": "Evidence of Helicobacter pylori supports a common cause of chronic non-atrophic gastritis",
+      "source_ids": ["NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Histopathology confirms loss of gastric glands, with or without intestinal metaplasia, in chronic inflammation",
+      "source_ids": ["AGA-ATROPHIC"]
+    },
+    {
+      "text": "Intestinal metaplasia on gastric histology almost always implies atrophic gastritis",
+      "source_ids": ["AGA-ATROPHIC"]
+    },
+    {
+      "text": "Endoscopic features may include pale thinned mucosa, increased vascular visibility, and loss of gastric folds",
+      "source_ids": ["AGA-ATROPHIC"]
+    },
+    {
+      "text": "Iron deficiency, vitamin B12 deficiency, or pernicious anemia may accompany corpus-predominant or autoimmune atrophic gastritis",
+      "source_ids": ["AGA-ATROPHIC", "NIDDK-DEFINITION"]
+    },
+    {
+      "text": "Autoimmune gastritis and associated autoimmune thyroid disease",
+      "source_ids": ["AGA-ATROPHIC", "NIDDK-DEFINITION"]
+    }
+  ]
+}

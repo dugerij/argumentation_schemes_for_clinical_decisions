@@ -10,6 +10,7 @@ MODE_ORDER = [
     "direct",
     "flat_rag",
     "graph_rag",
+    "evidence_grounded_argumentation",
     "structured_argument",
     "symbolic_argument",
 ]
@@ -17,6 +18,7 @@ MODE_LABELS = {
     "direct": "Direct",
     "flat_rag": "Flat RAG",
     "graph_rag": "Graph RAG",
+    "evidence_grounded_argumentation": "Evidence-Grounded LLM Argumentation",
     "structured_argument": "Structured argument",
     "symbolic_argument": "Symbolic argument",
 }
@@ -24,15 +26,22 @@ MODE_COLORS = {
     "direct": "#687078",
     "flat_rag": "#3478A5",
     "graph_rag": "#D17A22",
+    "evidence_grounded_argumentation": "#2A7F62",
     "structured_argument": "#2A7F62",
     "symbolic_argument": "#8B3F36",
 }
 
 
+def _matplotlib_config_dir() -> Path:
+    configured = os.environ.get("MPLCONFIGDIR")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    output_root = Path(os.environ.get("OUTPUT_ROOT", "output"))
+    return (output_root / ".matplotlib").expanduser().resolve()
+
+
 def _matplotlib():
-    config_dir = Path(
-        os.environ.get("MPLCONFIGDIR", "output/.matplotlib")
-    ).resolve()
+    config_dir = _matplotlib_config_dir()
     config_dir.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("MPLCONFIGDIR", str(config_dir))
     import matplotlib
@@ -150,7 +159,7 @@ def write_report_plots(
     ):
         draw_metric(axis, primary_rows, metric, title)
     figure.suptitle(
-        "Clinical ablation profile",
+        "Clinical method comparison profile",
         fontsize=16,
         fontweight="bold",
         y=0.98,
@@ -164,7 +173,7 @@ def write_report_plots(
         color="#4B5560",
     )
     figure.tight_layout(rect=(0.0, 0.04, 1.0, 0.95))
-    metrics_path = output_dir / "ablation_metrics.png"
+    metrics_path = output_dir / "method_comparison_metrics.png"
     figure.savefig(metrics_path, dpi=220, bbox_inches="tight")
     plt.close(figure)
 
@@ -177,7 +186,7 @@ def write_report_plots(
     argument_rows = [
         row
         for row in primary_rows
-        if row["mode"] in {"structured_argument", "symbolic_argument"}
+        if row["mode"] == "evidence_grounded_argumentation"
     ]
     argument_quality_path = output_dir / "argument_quality.png"
     figure, axes = plt.subplots(2, 2, figsize=(11.5, 7.0))
@@ -324,9 +333,9 @@ def write_report_plots(
             axis.set_axisbelow(True)
             axis.set_title(
                 (
-                    f"{dataset}: accuracy across the ablation sequence"
+                    f"{dataset}: accuracy across the method comparison"
                     if multiple_datasets
-                    else "Accuracy across the ablation sequence"
+                    else "Accuracy across the method comparison"
                 ),
                 fontsize=13,
                 fontweight="bold",
@@ -368,7 +377,7 @@ def write_report_plots(
         )
         plt.close(figure)
     return {
-        "ablation_metrics_plot": metrics_path,
+        "method_comparison_metrics_plot": metrics_path,
         "argument_quality_plot": argument_quality_path,
         "accuracy_progression_plot": progression_path,
     }

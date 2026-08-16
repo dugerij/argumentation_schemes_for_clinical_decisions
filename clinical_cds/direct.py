@@ -244,6 +244,13 @@ def load_direct_graph(path: Path) -> DiagnosticGraph:
                         text=premise_text,
                         premise_type=premise_type,
                         diagnosis_label=diagnosis,
+                        knowledge_source_ids=(
+                            f"direct-supplied-graph:direct:{_slug(category)}",
+                        ),
+                        source_chunk_id=(
+                            "source-chunk:"
+                            + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:20]
+                        ),
                     )
                 )
                 edges.append(
@@ -271,10 +278,19 @@ def load_direct_graphs(root: Path) -> tuple[DiagnosticGraph, ...]:
     return tuple(load_direct_graph(path) for path in paths)
 
 
+def _redacted_key_reference(raw_key: str) -> str:
+    """Identify a malformed annotation key for debugging without echoing the
+    clinical text it embeds (annotation keys carry raw patient narrative)."""
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:12]
+    return f"length={len(raw_key)} sha256={digest}"
+
+
 def _parse_annotation_key(raw_key: str) -> tuple[str, str, str | None, int | None]:
     match = ANNOTATION_SUFFIX_RE.match(raw_key)
     if match is None:
-        raise ValueError(f"Invalid DiReCT annotation key: {raw_key!r}")
+        raise ValueError(
+            f"Invalid DiReCT annotation key ({_redacted_key_reference(raw_key)})."
+        )
     text = normalize_label(match.group("text"))
     kind = match.group("kind")
     index = int(match.group("index")) if match.group("index") else None
@@ -318,7 +334,10 @@ def _parse_annotation(
                 )
             )
         if not isinstance(children, dict):
-            raise ValueError(f"Annotation children must be an object for {raw_key!r}.")
+            raise ValueError(
+                "Annotation children must be an object for key "
+                f"({_redacted_key_reference(raw_key)})."
+            )
         for child_key, grand_children in children.items():
             visit(str(child_key), grand_children, node_id)
         return node_id
@@ -326,7 +345,10 @@ def _parse_annotation(
     visit(root_key, root_children, None)
     conclusion, role, _, _ = _parse_annotation_key(root_key)
     if role != "diagnosis":
-        raise ValueError(f"DiReCT annotation root is not a diagnosis: {root_key!r}")
+        raise ValueError(
+            "DiReCT annotation root is not a diagnosis "
+            f"({_redacted_key_reference(root_key)})."
+        )
     return tuple(nodes), tuple(edges), conclusion
 
 

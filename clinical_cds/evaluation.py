@@ -10,7 +10,15 @@ from pathlib import Path
 from statistics import fmean, pstdev
 from typing import Any, Iterable
 
-from clinical_cds.normalization import UMLSNormalizer, lexical_diagnosis_key
+from clinical_cds.normalization import (
+    DIRECT_HIERARCHY_COMPATIBILITY,
+    DISTANT_HIERARCHY_COMPATIBILITY,
+    UMLSNormalizer,
+    diagnosis_family_key,
+    diagnosis_modifiers,
+    lexical_diagnosis_key,
+    modifiers_contradict,
+)
 from clinical_cds.retrieval import tokenize
 from clinical_cds.schema import (
     ClinicalCase,
@@ -35,6 +43,7 @@ class CaseMetrics:
     mode: str
     exact_match: float
     hierarchy_score: float
+    diagnosis_family_match: float
     covered: float
     citation_validity: float
     observation_precision: float | None
@@ -47,6 +56,10 @@ class CaseMetrics:
     error: float
     argument_schema_validity: float | None
     argument_evidence_validity: float | None
+    argument_evidence_compatibility: float | None
+    argument_scheme_validity: float | None
+    supported_review_grounding: float | None
+    counterargument_evidence_validity: float | None
     valid_evidence_reference_fraction: float | None
     verifier_review_coverage: float | None
     symbolic_trace_fidelity: float | None
@@ -75,40 +88,92 @@ def exact_label_match(
 ) -> float:
     if not predicted or not gold:
         return 0.0
-    return float(
+    if lexical_diagnosis_key(predicted) == lexical_diagnosis_key(gold):
+        return 1.0
+    same_concept = (
         normalized_label_key(predicted, normalizer)
         == normalized_label_key(gold, normalizer)
+    )
+    return float(
+        same_concept
+        and diagnosis_modifiers(predicted) == diagnosis_modifiers(gold)
     )
 
 
 def _hierarchy_relations(
     graphs: Iterable[DiagnosticGraph],
     normalizer: UMLSNormalizer | None = None,
-) -> dict[str, set[str]]:
-    related: defaultdict[str, set[str]] = defaultdict(set)
+) -> dict[str, dict[str, int]]:
+    related: defaultdict[str, dict[str, int]] = defaultdict(dict)
     for graph in graphs:
         for path in graph.diagnostic_paths.values():
             keys = [normalized_label_key(label, normalizer) for label in path]
             for left_index, left in enumerate(keys):
-                for right in keys[left_index + 1 :]:
-                    related[left].add(right)
-                    related[right].add(left)
+                for right_index, right in enumerate(
+                    keys[left_index + 1 :],
+                    start=left_index + 1,
+                ):
+                    distance = right_index - left_index
+                    current = related[left].get(right)
+                    related[left][right] = (
+                        distance if current is None else min(current, distance)
+                    )
+                    current = related[right].get(left)
+                    related[right][left] = (
+                        distance if current is None else min(current, distance)
+                    )
     return dict(related)
 
 
 def hierarchy_score(
     predicted: str,
     gold: str,
-    relations: dict[str, set[str]],
+    relations: dict[str, dict[str, int]],
     normalizer: UMLSNormalizer | None = None,
 ) -> float:
     if exact_label_match(predicted, gold, normalizer):
         return 1.0
     predicted_key = normalized_label_key(predicted, normalizer)
     gold_key = normalized_label_key(gold, normalizer)
-    if predicted_key and gold_key in relations.get(predicted_key, set()):
-        return 0.5
+    if predicted_key == gold_key:
+        predicted_modifiers = diagnosis_modifiers(predicted)
+        gold_modifiers = diagnosis_modifiers(gold)
+        if modifiers_contradict(predicted, gold):
+            return 0.0
+        if not predicted_modifiers or not gold_modifiers:
+            return DIRECT_HIERARCHY_COMPATIBILITY
+        return DISTANT_HIERARCHY_COMPATIBILITY
+    distance = relations.get(predicted_key, {}).get(gold_key)
+    if distance == 1:
+        return DIRECT_HIERARCHY_COMPATIBILITY
+    if distance is not None:
+        return DISTANT_HIERARCHY_COMPATIBILITY
+    # If both labels occur in the controlled hierarchy but are not connected,
+    # they are competing branches. Shared surface words cannot make siblings
+    # compatible.
+    if predicted_key in relations and gold_key in relations:
+        return 0.0
+    if (
+        diagnosis_family_key(predicted) == diagnosis_family_key(gold)
+        and not modifiers_contradict(predicted, gold)
+    ):
+        predicted_modifiers = diagnosis_modifiers(predicted)
+        gold_modifiers = diagnosis_modifiers(gold)
+        if not predicted_modifiers or not gold_modifiers:
+            return DIRECT_HIERARCHY_COMPATIBILITY
+        return DISTANT_HIERARCHY_COMPATIBILITY
     return 0.0
+
+
+def diagnosis_family_match(predicted: str, gold: str) -> float:
+    if not predicted or not gold:
+        return 0.0
+    if exact_label_match(predicted, gold):
+        return 1.0
+    return float(
+        diagnosis_family_key(predicted) == diagnosis_family_key(gold)
+        and not modifiers_contradict(predicted, gold)
+    )
 
 
 def _token_overlap(left: str, right: str) -> float:
@@ -274,6 +339,16 @@ def evaluate_predictions(
                     if covered
                     else 0.0
                 ),
+                diagnosis_family_match=(
+                    float(hierarchy_score(
+                        record.predicted_label,
+                        record.gold_label,
+                        relations,
+                        normalizer,
+                    ) > 0.0)
+                    if covered
+                    else 0.0
+                ),
                 covered=float(covered),
                 citation_validity=_citation_validity(record),
                 observation_precision=precision,
@@ -294,6 +369,22 @@ def evaluate_predictions(
                 argument_evidence_validity=_argument_metric(
                     record,
                     "argument_evidence_validity",
+                ),
+                argument_evidence_compatibility=_argument_metric(
+                    record,
+                    "argument_evidence_compatibility",
+                ),
+                argument_scheme_validity=_argument_metric(
+                    record,
+                    "argument_scheme_validity",
+                ),
+                supported_review_grounding=_argument_metric(
+                    record,
+                    "supported_review_grounding",
+                ),
+                counterargument_evidence_validity=_argument_metric(
+                    record,
+                    "counterargument_evidence_validity",
                 ),
                 valid_evidence_reference_fraction=_argument_metric(
                     record,
@@ -343,6 +434,9 @@ def summarize_modes(metrics: Iterable[CaseMetrics]) -> list[dict[str, Any]]:
                     "accuracy": _mean(exact_values),
                     "accuracy_sd": pstdev(exact_values) if len(exact_values) > 1 else 0.0,
                     "hierarchy_score": _mean([row.hierarchy_score for row in rows]),
+                    "diagnosis_family_accuracy": _mean(
+                        [row.diagnosis_family_match for row in rows]
+                    ),
                     "coverage": _mean([row.covered for row in rows]),
                     "selective_accuracy": _mean(
                         [
@@ -373,6 +467,21 @@ def summarize_modes(metrics: Iterable[CaseMetrics]) -> list[dict[str, Any]]:
                     ),
                     "argument_evidence_validity": _mean(
                         [row.argument_evidence_validity for row in rows]
+                    ),
+                    "argument_evidence_compatibility": _mean(
+                        [row.argument_evidence_compatibility for row in rows]
+                    ),
+                    "argument_scheme_validity": _mean(
+                        [row.argument_scheme_validity for row in rows]
+                    ),
+                    "supported_review_grounding": _mean(
+                        [row.supported_review_grounding for row in rows]
+                    ),
+                    "counterargument_evidence_validity": _mean(
+                        [
+                            row.counterargument_evidence_validity
+                            for row in rows
+                        ]
                     ),
                     "valid_evidence_reference_fraction": _mean(
                         [
@@ -432,7 +541,7 @@ def _paired_bootstrap(
     )
 
 
-def _mcnemar_exact(baseline: list[float], comparison: list[float]) -> tuple[int, int, float]:
+def _paired_exact_test(baseline: list[float], comparison: list[float]) -> tuple[int, int, float]:
     baseline_only = sum(
         left == 1.0 and right == 0.0
         for left, right in zip(baseline, comparison, strict=True)
@@ -478,7 +587,7 @@ def paired_comparisons(
                 baseline_values,
                 comparison_values,
             )
-            baseline_only, comparison_only, p_value = _mcnemar_exact(
+            baseline_only, comparison_only, p_value = _paired_exact_test(
                 baseline_values,
                 comparison_values,
             )
@@ -491,9 +600,9 @@ def paired_comparisons(
                     "accuracy_difference": difference,
                     "bootstrap_ci_low": lower,
                     "bootstrap_ci_high": upper,
-                    "mcnemar_baseline_only_correct": baseline_only,
-                    "mcnemar_comparison_only_correct": comparison_only,
-                    "mcnemar_exact_p": p_value,
+                    "baseline_only_correct": baseline_only,
+                    "comparison_only_correct": comparison_only,
+                    "paired_exact_p": p_value,
                 }
             )
     return output
@@ -505,36 +614,7 @@ def load_prediction_records(path: Path) -> tuple[PredictionRecord, ...]:
         for line in source:
             if not line.strip():
                 continue
-            payload = json.loads(line)
-            records.append(
-                PredictionRecord(
-                    run_id=str(payload["run_id"]),
-                    case_id=str(payload["case_id"]),
-                    dataset=str(payload["dataset"]),
-                    task=str(payload["task"]),
-                    mode=ExperimentMode(payload["mode"]),
-                    model_id=str(payload["model_id"]),
-                    gold_label=str(payload["gold_label"]),
-                    predicted_label=str(payload.get("predicted_label") or ""),
-                    reasoning=str(payload.get("reasoning") or ""),
-                    citations=tuple(payload.get("citations") or ()),
-                    observations=tuple(
-                        PredictedObservation(
-                            text=str(item.get("text") or ""),
-                            source_id=item.get("source_id"),
-                        )
-                        for item in payload.get("observations") or ()
-                    ),
-                    abstained=bool(payload.get("abstained")),
-                    latency_seconds=float(payload.get("latency_seconds") or 0.0),
-                    prompt_hash=str(payload.get("prompt_hash") or ""),
-                    cache_hit=bool(payload.get("cache_hit")),
-                    valid_evidence_ids=tuple(payload.get("valid_evidence_ids") or ()),
-                    quality_flags=tuple(payload.get("quality_flags") or ()),
-                    error=payload.get("error"),
-                    metadata=dict(payload.get("metadata") or {}),
-                )
-            )
+            records.append(PredictionRecord.from_dict(json.loads(line)))
     return tuple(records)
 
 

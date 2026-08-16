@@ -1,0 +1,32 @@
+{
+  "diagnostic": {
+    "Suspected Gastritis": {
+      "Acute Gastritis": [],
+      "Chronic Gastritis": {
+        "Chronic Non-atrophic Gastritis": [],
+        "Chronic Atrophic Gastritis": []
+      }
+    }
+  },
+  "knowledge": {
+    "Suspected Gastritis": {
+      "Symptoms": "Many patients have no symptoms; Upper abdominal pain or discomfort; Nausea or vomiting; Early satiety or excessive fullness after eating; Loss of appetite or weight loss; Black or tarry stool, blood or coffee-ground material in vomit, fatigue, dyspnea, or light-headedness may indicate gastric bleeding",
+      "Risk Factors": "Helicobacter pylori infection; Long-term exposure to NSAIDs, alcohol, or bile reflux; Autoimmune disease; Critical illness, sepsis, severe injury, or burns",
+      "Diagnostic Criteria": "Upper gastrointestinal endoscopy with gastric biopsies can diagnose gastritis, determine its cause, and assess complications; Stool antigen or urea breath testing can identify Helicobacter pylori infection"
+    },
+    "Acute Gastritis": {
+      "Diagnostic Criteria": "Acute gastritis develops suddenly and lasts a short time; Gastric biopsy must show inflammation rather than mucosal injury with little or no inflammation"
+    },
+    "Chronic Gastritis": {
+      "Diagnostic Criteria": "Chronic gastritis develops slowly and lasts a long time; Helicobacter pylori and autoimmune gastritis are common chronic forms"
+    },
+    "Chronic Non-atrophic Gastritis": {
+      "Diagnostic Criteria": "Gastric histology shows chronic inflammation without the gland loss or intestinal metaplasia that defines atrophic gastritis; Evidence of Helicobacter pylori supports a common cause of chronic non-atrophic gastritis"
+    },
+    "Chronic Atrophic Gastritis": {
+      "Diagnostic Criteria": "Histopathology confirms loss of gastric glands, with or without intestinal metaplasia, in chronic inflammation; Intestinal metaplasia on gastric histology almost always implies atrophic gastritis; Endoscopic features may include pale thinned mucosa, increased vascular visibility, and loss of gastric folds",
+      "Signs": "Iron deficiency, vitamin B12 deficiency, or pernicious anemia may accompany corpus-predominant or autoimmune atrophic gastritis",
+      "Risk Factors": "Helicobacter pylori infection; Autoimmune gastritis and associated autoimmune thyroid disease"
+    }
+  }
+}

@@ -84,6 +84,15 @@ def append_jsonl(path: Path, record: dict[str, Any]) -> None:
         file.write(json.dumps(to_jsonable(record), ensure_ascii=False) + "\n")
 
 
+def write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{uuid.uuid4().hex}.tmp")
+    with temporary.open("w", encoding="utf-8") as file:
+        for record in records:
+            file.write(json.dumps(to_jsonable(record), ensure_ascii=False) + "\n")
+    temporary.replace(path)
+
+
 def load_jsonl(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
