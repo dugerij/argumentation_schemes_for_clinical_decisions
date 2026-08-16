@@ -36,6 +36,18 @@ SCOPES: dict[str, dict[str, object]] = {
         "timeout": "4h",
         "run_name": "comparison-development",
     },
+    "test": {
+        "queries_relative": Path(
+            "output/graphrag/microsoft-graphrag-controlled-corpus-v1/"
+            "test/sealed-test-queries-v1/test_queries.jsonl"
+        ),
+        "queries_sha256": (
+            "bac9ea39ce67b3657a1bcf72e729e5417501c607f1bcc97008f7de98ed5d6763"
+        ),
+        "case_count": 423,
+        "timeout": "8h",
+        "run_name": "comparison-test",
+    },
 }
 
 
