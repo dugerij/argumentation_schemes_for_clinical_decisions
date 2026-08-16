@@ -5,26 +5,87 @@ from pathlib import Path
 
 
 def test_gpu_runtime_uses_pinned_qwen_judge_and_never_submits_jobs() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8").casefold()
+    source = Path("job/run.py").read_text(encoding="utf-8").casefold()
 
     assert "medgemma-27b-text-it" not in source  # model identity comes from one config
     assert "qwen/qwen3-30b-a3b-instruct-2507-fp8" in source
-    assert "reasoner_model=model" in source
+    assert "model=generator_model" in source
+    assert "reasoner_model=reasoner_model" in source
+    assert "verifier_model=verifier_model" in source
     assert "model=judge_model" in source
     assert "run_job(" not in source
     assert "jobs run" not in source
     assert "release_certificate" not in source
 
 
+def test_generator_verifier_reasoner_default_to_chat_model_and_share_one_slot(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RUN_ID", "model-slot-default-test")
+    monkeypatch.setenv("RUN_SCOPE", "development")
+    monkeypatch.setenv("RUN_PHASE", "comparison")
+    for key in (
+        "CHAT_MODEL_ID", "CHAT_MODEL_REVISION",
+        "GENERATOR_MODEL_ID", "GENERATOR_MODEL_REVISION",
+        "VERIFIER_MODEL_ID", "VERIFIER_MODEL_REVISION",
+        "REASONER_MODEL_ID", "REASONER_MODEL_REVISION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    sys.modules.pop("job.run", None)
+    sys.modules.pop("job.config", None)
+    runtime = importlib.import_module("job.run")
+
+    assert runtime.GENERATOR_MODEL_ID == runtime.CHAT_MODEL_ID
+    assert runtime.VERIFIER_MODEL_ID == runtime.CHAT_MODEL_ID
+    assert runtime.REASONER_MODEL_ID == runtime.CHAT_MODEL_ID
+    assert len(runtime.CHAT_SLOTS) == 1
+    assert runtime.CHAT_SLOT_GPU_MEMORY_UTILIZATION == 0.20
+    # Slot 0 keeps the original fixed ports, so the default deployment is unchanged.
+    assert runtime.CHAT_URL == "http://127.0.0.1:8000/v1"
+    assert runtime.CHAT_UPSTREAM_URL == "http://127.0.0.1:8003/v1"
+
+
+def test_overriding_one_role_starts_a_second_chat_slot_and_splits_gpu_share(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("RUN_ID", "model-slot-split-test")
+    monkeypatch.setenv("RUN_SCOPE", "development")
+    monkeypatch.setenv("RUN_PHASE", "comparison")
+    monkeypatch.setenv("REASONER_MODEL_ID", "Qwen/Qwen3-8B")
+    monkeypatch.setenv("REASONER_MODEL_REVISION", "deadbeef")
+    for key in (
+        "CHAT_MODEL_ID", "CHAT_MODEL_REVISION",
+        "GENERATOR_MODEL_ID", "GENERATOR_MODEL_REVISION",
+        "VERIFIER_MODEL_ID", "VERIFIER_MODEL_REVISION",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    sys.modules.pop("job.run", None)
+    sys.modules.pop("job.config", None)
+    runtime = importlib.import_module("job.run")
+
+    assert runtime.GENERATOR_MODEL_ID == runtime.VERIFIER_MODEL_ID == runtime.CHAT_MODEL_ID
+    assert runtime.REASONER_MODEL_ID == "Qwen/Qwen3-8B"
+    assert len(runtime.CHAT_SLOTS) == 2
+    # The chat role's total GPU share (0.20) is split evenly across the slots in use.
+    assert runtime.CHAT_SLOT_GPU_MEMORY_UTILIZATION == 0.10
+    assert runtime.CHAT_URL == "http://127.0.0.1:8000/v1"
+    assert runtime.chat_slot_boundary_url("Qwen/Qwen3-8B", "deadbeef") == (
+        "http://127.0.0.1:8007/v1"
+    )
+    assert runtime.chat_slot_upstream_url("Qwen/Qwen3-8B", "deadbeef") == (
+        "http://127.0.0.1:8006/v1"
+    )
+
+
 def test_gpu_runtime_uses_the_canonical_current_argument_method() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
 
     assert "from clinical_cds.method_contract import CURRENT_ARGUMENT_METHOD" in source
     assert "argument_method=CURRENT_ARGUMENT_METHOD" in source
 
 
 def test_paid_runtime_runs_blinded_family_judge_after_predictions_freeze() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
 
     experiment = source.index("comparison = run_experiment(")
     judging = source.index("judge_results = write_clinical_judgments(")
@@ -34,7 +95,7 @@ def test_paid_runtime_runs_blinded_family_judge_after_predictions_freeze() -> No
 
 
 def test_evaluation_resume_runs_before_retrieval_or_medgemma_startup() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
 
     branch = source.index('if RUN_PHASE == "evaluation"')
     preflight = source.index("argument_generation_preflight =", branch)
@@ -50,13 +111,13 @@ def test_evaluation_is_an_allowlisted_runtime_phase(monkeypatch) -> None:
     monkeypatch.setenv("RUN_ID", "evaluation-phase-test")
     monkeypatch.setenv("RUN_SCOPE", "development")
     monkeypatch.setenv("RUN_PHASE", "evaluation")
-    sys.modules.pop("hf_job.config", None)
-    config = importlib.import_module("hf_job.config")
+    sys.modules.pop("job.config", None)
+    config = importlib.import_module("job.config")
     assert config.RUN_PHASE == "evaluation"
 
 
 def test_both_generation_models_have_final_prompt_boundary_audits() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
 
     assert 'JUDGE_URL = "http://127.0.0.1:8005/v1"' in source
     assert 'JUDGE_UPSTREAM_URL = "http://127.0.0.1:8004/v1"' in source
@@ -71,9 +132,9 @@ def test_graphrag_medgemma_prompt_audit_executes_its_validation_body(
     monkeypatch.setenv("RUN_ID", "prompt-audit-regression")
     monkeypatch.setenv("RUN_SCOPE", "development")
     monkeypatch.setenv("RUN_PHASE", "comparison")
-    sys.modules.pop("hf_job.run", None)
-    sys.modules.pop("hf_job.config", None)
-    runtime = importlib.import_module("hf_job.run")
+    sys.modules.pop("job.run", None)
+    sys.modules.pop("job.config", None)
+    runtime = importlib.import_module("job.run")
     from graphrag_runtime.audit import GRAPHRAG_CANDIDATE_CHOICE_CONTRACT_ID
 
     path = tmp_path / "prompt.jsonl"
@@ -104,9 +165,9 @@ def test_paid_runtime_preflights_retry_budget_and_structured_output_bounds(
     monkeypatch.setenv("RUN_ID", "argument-generation-preflight")
     monkeypatch.setenv("RUN_SCOPE", "development")
     monkeypatch.setenv("RUN_PHASE", "comparison")
-    sys.modules.pop("hf_job.run", None)
-    sys.modules.pop("hf_job.config", None)
-    runtime = importlib.import_module("hf_job.run")
+    sys.modules.pop("job.run", None)
+    sys.modules.pop("job.config", None)
+    runtime = importlib.import_module("job.run")
 
     result = runtime.validate_argument_generation_contract()
 
@@ -117,14 +178,14 @@ def test_paid_runtime_preflights_retry_budget_and_structured_output_bounds(
 
 
 def test_gpu_runtime_is_supplied_by_the_pinned_image_not_installed_at_startup() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
     runbook = Path("RUNNING.md").read_text(encoding="utf-8")
 
     assert '"pip", "install", f"vllm==' not in source
     assert '"--system-site-packages"' in source
     assert "vllm/vllm-openai:v0.18.1" in runbook
     assert "pytorch/pytorch:2.6.0" not in runbook
-    assert "python3 /workspace/project/hf_job/run.py" in runbook
+    assert "python3 /workspace/project/job/run.py" in runbook
     assert "python_executable = Path(sys.executable).resolve()" in source
     assert 'vllm_executable.parent / "python"' not in source
 
@@ -134,7 +195,7 @@ def test_readme_exposes_direct_hugging_face_commands() -> None:
 
     assert "hf buckets sync" in readme
     assert "hf jobs run --detach" in readme
-    assert "python -m hf_job.prepare" in readme
+    assert "python -m job.prepare" in readme
     assert "Choose a new `RUN_ID` for every job" in readme
 
 
@@ -165,9 +226,9 @@ def test_bounded_development_selection_is_reproducible_and_case_id_only(
     monkeypatch.setenv("RUN_ID", "bounded-selection-test")
     monkeypatch.setenv("RUN_SCOPE", "development")
     monkeypatch.setenv("RUN_PHASE", "comparison")
-    sys.modules.pop("hf_job.prepare", None)
-    sys.modules.pop("hf_job.config", None)
-    prepare = importlib.import_module("hf_job.prepare")
+    sys.modules.pop("job.prepare", None)
+    sys.modules.pop("job.config", None)
+    prepare = importlib.import_module("job.prepare")
     records = [
         {"case_id": f"case-{index}", "gold_label": f"label-{index}"}
         for index in range(12)
@@ -196,7 +257,7 @@ def test_runbook_documents_bounded_development_without_full_88_case_cost() -> No
 
 
 def test_runtime_accepts_cryptographically_bound_sample_in_retrieval_phase() -> None:
-    source = Path("hf_job/run.py").read_text(encoding="utf-8")
+    source = Path("job/run.py").read_text(encoding="utf-8")
 
     bounded_guard = source.split("if sample and (", 1)[1].split("):", 1)[0]
     assert 'RUN_PHASE != "comparison"' not in bounded_guard

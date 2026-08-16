@@ -42,7 +42,7 @@ from graphrag_runtime.provenance_contract import (
     PROVENANCE_CONTRACT_ID,
     canonical_sha256 as provenance_sha256,
 )
-from hf_job.config import (
+from job.config import (
     OUTPUT_TARGET,
     RUN_CONFIG,
     RUN_ID,
@@ -53,14 +53,79 @@ from hf_job.config import (
 )
 
 
-CHAT_MODEL_ID = MEDGEMMA_MODEL_ID
-CHAT_MODEL_REVISION = MEDGEMMA_MODEL_REVISION
-JUDGE_MODEL_ID = "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
-JUDGE_MODEL_REVISION = "5a5a776300a41aaa681dd7ff0106608ef2bc90db"
+# Generator, verifier and reasoner each read their own model/revision env var, falling
+# back to CHAT_MODEL_ID/CHAT_MODEL_REVISION (itself defaulting to MedGemma) when unset.
+# Judge is separate and evaluation-only. Overriding any of these breaks the frozen
+# determinism contract in the notebook's Section 4 for that run, so note the override in
+# the report if you use one.
+CHAT_MODEL_ID = os.environ.get("CHAT_MODEL_ID") or MEDGEMMA_MODEL_ID
+CHAT_MODEL_REVISION = os.environ.get("CHAT_MODEL_REVISION") or MEDGEMMA_MODEL_REVISION
+GENERATOR_MODEL_ID = os.environ.get("GENERATOR_MODEL_ID") or CHAT_MODEL_ID
+GENERATOR_MODEL_REVISION = (
+    os.environ.get("GENERATOR_MODEL_REVISION") or CHAT_MODEL_REVISION
+)
+VERIFIER_MODEL_ID = os.environ.get("VERIFIER_MODEL_ID") or CHAT_MODEL_ID
+VERIFIER_MODEL_REVISION = (
+    os.environ.get("VERIFIER_MODEL_REVISION") or CHAT_MODEL_REVISION
+)
+REASONER_MODEL_ID = os.environ.get("REASONER_MODEL_ID") or CHAT_MODEL_ID
+REASONER_MODEL_REVISION = (
+    os.environ.get("REASONER_MODEL_REVISION") or CHAT_MODEL_REVISION
+)
+JUDGE_MODEL_ID = (
+    os.environ.get("JUDGE_MODEL_ID") or "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8"
+)
+JUDGE_MODEL_REVISION = (
+    os.environ.get("JUDGE_MODEL_REVISION")
+    or "5a5a776300a41aaa681dd7ff0106608ef2bc90db"
+)
 EMBEDDING_MODEL_ID = "BAAI/bge-small-en-v1.5"
 EMBEDDING_MODEL_REVISION = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
-CHAT_URL = "http://127.0.0.1:8000/v1"
-CHAT_UPSTREAM_URL = "http://127.0.0.1:8003/v1"
+
+# Generator, verifier and reasoner get one vLLM server per distinct (model_id, revision)
+# they actually resolve to, not one server each. With every role left at its default, all
+# three resolve to CHAT_MODEL_ID, so exactly one chat server starts and slot 0 below keeps
+# the original fixed ports -- the unmodified case is the same deployment as before this
+# split existed. A distinct model only gets a second or third server when a role is
+# actually overridden away from the others.
+CHAT_ROLE_MODELS: dict[str, tuple[str, str]] = {
+    "generator": (GENERATOR_MODEL_ID, GENERATOR_MODEL_REVISION),
+    "verifier": (VERIFIER_MODEL_ID, VERIFIER_MODEL_REVISION),
+    "reasoner": (REASONER_MODEL_ID, REASONER_MODEL_REVISION),
+}
+CHAT_SLOTS: list[tuple[str, str]] = []
+for _role_pair in CHAT_ROLE_MODELS.values():
+    if _role_pair not in CHAT_SLOTS:
+        CHAT_SLOTS.append(_role_pair)
+if len(CHAT_SLOTS) > 3:
+    raise ValueError(
+        "At most 3 distinct generator/verifier/reasoner models are supported per job."
+    )
+CHAT_SLOT_INDEX = {pair: index for index, pair in enumerate(CHAT_SLOTS)}
+CHAT_SLOT_IPC_TAGS = ("chat", "chat2", "chat3")
+CHAT_SLOT_UPSTREAM_PORTS = (8003, 8006, 8008)
+CHAT_SLOT_BOUNDARY_PORTS = (8000, 8007, 8009)
+# The chat role's total GPU memory share stays fixed at 0.20 (today's value) no matter how
+# many distinct models are in play, split evenly across however many servers are actually
+# started. Requesting more distinct models therefore means less memory, and less context
+# headroom, per model -- worth a bigger flavor if you rely on more than one.
+CHAT_SLOT_GPU_MEMORY_UTILIZATION = 0.20 / len(CHAT_SLOTS)
+
+
+def chat_slot_boundary_url(model_id: str, revision: str) -> str:
+    port = CHAT_SLOT_BOUNDARY_PORTS[CHAT_SLOT_INDEX[(model_id, revision)]]
+    return f"http://127.0.0.1:{port}/v1"
+
+
+def chat_slot_upstream_url(model_id: str, revision: str) -> str:
+    port = CHAT_SLOT_UPSTREAM_PORTS[CHAT_SLOT_INDEX[(model_id, revision)]]
+    return f"http://127.0.0.1:{port}/v1"
+
+
+# GraphRAG's own retrieval-time completion calls (the local_chat model in
+# prepare_runtime_workspace) are a generation task, so they follow the generator's server.
+CHAT_URL = chat_slot_boundary_url(GENERATOR_MODEL_ID, GENERATOR_MODEL_REVISION)
+CHAT_UPSTREAM_URL = chat_slot_upstream_url(GENERATOR_MODEL_ID, GENERATOR_MODEL_REVISION)
 JUDGE_URL = "http://127.0.0.1:8005/v1"
 JUDGE_UPSTREAM_URL = "http://127.0.0.1:8004/v1"
 EMBEDDING_URL = "http://127.0.0.1:8001/v1"
@@ -581,8 +646,13 @@ def prepare_vllm_ipc_namespaces(
     process_id: int | None = None,
     zmq_limit_bytes: int = LINUX_UNIX_SOCKET_PATH_LIMIT_BYTES,
     include_final_reasoner: bool = False,
+    chat_slot_count: int = 1,
 ) -> dict[str, Any]:
     """Create short private namespaces for vLLM's exact UUID IPC generator."""
+    if not 1 <= chat_slot_count <= len(CHAT_SLOT_IPC_TAGS):
+        raise ValueError(
+            f"chat_slot_count must be between 1 and {len(CHAT_SLOT_IPC_TAGS)}."
+        )
     ipc_root = Path(ipc_root)
     if not ipc_root.is_absolute():
         raise ValueError("VLLM IPC root must be absolute.")
@@ -610,6 +680,9 @@ def prepare_vllm_ipc_namespaces(
         "embedding": session / "bge",
         "chat": session / "med",
     }
+    extra_chat_slot_dirs = ("md2", "md3")
+    for extra_index in range(chat_slot_count - 1):
+        bases[CHAT_SLOT_IPC_TAGS[extra_index + 1]] = session / extra_chat_slot_dirs[extra_index]
     if include_final_reasoner:
         bases["final_reasoner"] = session / "qwn"
     audits: dict[str, dict[str, Any]] = {}
@@ -780,7 +853,8 @@ def prepare_runtime_workspace(
         query_root / "workspace/output/lancedb"
     )
     source_settings["completion_models"]["local_chat"]["api_base"] = chat_url
-    source_settings["completion_models"]["local_chat"]["model"] = CHAT_MODEL_ID
+    # Retrieval-time generation is a generator task, so it follows the generator's model.
+    source_settings["completion_models"]["local_chat"]["model"] = GENERATOR_MODEL_ID
     source_settings["completion_models"]["local_chat"]["call_args"] = {
         "max_tokens": COMPLETION_TOKENS,
     }
@@ -1288,6 +1362,7 @@ def main() -> int:
             Path(configured_ipc_root),
             run_id=run_id,
             include_final_reasoner=True,
+            chat_slot_count=len(CHAT_SLOTS),
         )
         ipc_control = verify_pinned_vllm_ipc_control(
             Path(vllm),
@@ -1302,8 +1377,6 @@ def main() -> int:
             "server_namespaces": ipc_control,
         })
         with (
-            (logs / "chat-vllm.log").open("w") as chat_log,
-            (logs / "chat-boundary.log").open("w") as chat_boundary_log,
             (logs / "reasoner-vllm.log").open("w") as reasoner_log,
             (logs / "reasoner-boundary.log").open("w") as reasoner_boundary_log,
             (logs / "embedding-vllm.log").open("w") as embedding_log,
@@ -1396,62 +1469,80 @@ def main() -> int:
             )
             servers.append(reasoner_boundary)
             _wait_for_server(reasoner_boundary, JUDGE_URL, logs / "reasoner-boundary.log")
-            medgemma_snapshot = Path(
-                __import__("huggingface_hub").snapshot_download(
-                    repo_id=CHAT_MODEL_ID,
-                    revision=CHAT_MODEL_REVISION,
-                    allow_patterns=[
-                        "added_tokens.json",
-                        "chat_template.jinja",
-                        "special_tokens_map.json",
-                        "tokenizer.json",
-                        "tokenizer_config.json",
-                    ],
+            # One vLLM server per distinct generator/verifier/reasoner model (CHAT_SLOTS),
+            # not one per role. All boundary processes share prompt_audit, so
+            # audit_medgemma_prompt_boundary below sees every chat-role request regardless
+            # of which slot served it.
+            for slot_index, (slot_model_id, slot_revision) in enumerate(CHAT_SLOTS):
+                slot_tag = CHAT_SLOT_IPC_TAGS[slot_index]
+                slot_upstream_url = chat_slot_upstream_url(slot_model_id, slot_revision)
+                slot_boundary_url = chat_slot_boundary_url(slot_model_id, slot_revision)
+                slot_snapshot = Path(
+                    __import__("huggingface_hub").snapshot_download(
+                        repo_id=slot_model_id,
+                        revision=slot_revision,
+                        allow_patterns=[
+                            "added_tokens.json",
+                            "chat_template.jinja",
+                            "special_tokens_map.json",
+                            "tokenizer.json",
+                            "tokenizer_config.json",
+                        ],
+                    )
                 )
-            )
-            chat_command = completion_server_command(
-                vllm,
-                model_id=CHAT_MODEL_ID,
-                revision=CHAT_MODEL_REVISION,
-                port=8003,
-                max_model_len=MAX_MODEL_LEN,
-                gpu_memory_utilization=0.20,
-            )
-            chat = subprocess.Popen(
-                chat_command,
-                stdout=chat_log,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=vllm_server_environment(ipc_paths["bases"]["chat"]),
-            )
-            servers.append(chat)
-            _wait_for_server(chat, CHAT_UPSTREAM_URL, logs / "chat-vllm.log")
-            chat_boundary = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "graphrag_runtime.medgemma_chat_boundary",
-                    "--upstream-url",
-                    CHAT_UPSTREAM_URL,
-                    "--port",
-                    "8000",
-                    "--audit-log",
-                    str(prompt_audit),
-                    "--model-source",
-                    str(medgemma_snapshot),
-                    "--revision",
-                    CHAT_MODEL_REVISION,
-                    "--local-files-only",
-                ],
-                stdout=chat_boundary_log,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            servers.append(chat_boundary)
-            _wait_for_server(chat_boundary, CHAT_URL, logs / "chat-boundary.log")
+                with (
+                    (logs / f"{slot_tag}-vllm.log").open("w") as slot_chat_log,
+                    (logs / f"{slot_tag}-boundary.log").open("w") as slot_boundary_log,
+                ):
+                    chat_command = completion_server_command(
+                        vllm,
+                        model_id=slot_model_id,
+                        revision=slot_revision,
+                        port=CHAT_SLOT_UPSTREAM_PORTS[slot_index],
+                        max_model_len=MAX_MODEL_LEN,
+                        gpu_memory_utilization=CHAT_SLOT_GPU_MEMORY_UTILIZATION,
+                    )
+                    chat = subprocess.Popen(
+                        chat_command,
+                        stdout=slot_chat_log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        env=vllm_server_environment(ipc_paths["bases"][slot_tag]),
+                    )
+                    servers.append(chat)
+                    _wait_for_server(
+                        chat, slot_upstream_url, logs / f"{slot_tag}-vllm.log"
+                    )
+                    chat_boundary = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-m",
+                            "graphrag_runtime.medgemma_chat_boundary",
+                            "--upstream-url",
+                            slot_upstream_url,
+                            "--port",
+                            str(CHAT_SLOT_BOUNDARY_PORTS[slot_index]),
+                            "--audit-log",
+                            str(prompt_audit),
+                            "--model-source",
+                            str(slot_snapshot),
+                            "--revision",
+                            slot_revision,
+                            "--expected-model-id",
+                            slot_model_id,
+                            "--local-files-only",
+                        ],
+                        stdout=slot_boundary_log,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    servers.append(chat_boundary)
+                    _wait_for_server(
+                        chat_boundary, slot_boundary_url, logs / f"{slot_tag}-boundary.log"
+                    )
 
             if RUN_PHASE == "mapping_diagnostic":
-                from hf_job.mapping_diagnostic import run_mapping_diagnostic
+                from job.mapping_diagnostic import run_mapping_diagnostic
 
                 diagnostic_model = OpenAICompatibleDiagnosticModel(
                     model_name=CHAT_MODEL_ID,
@@ -1625,7 +1716,7 @@ def main() -> int:
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 case_outputs.append(output)
-                if RUN_SCOPE == "development" and len(case_outputs) == 5:
+                if RUN_SCOPE in {"development", "test"} and len(case_outputs) == 5:
                     # checkpoint["all_gates_pass"] is informational, not an
                     # automated gate: this job keeps running the remaining
                     # cases and the paid generation phase regardless of its
@@ -1678,6 +1769,12 @@ def main() -> int:
                 "graphrag_version": version("graphrag"),
                 "vllm_version": VLLM_VERSION,
                 "chat_model_id": CHAT_MODEL_ID,
+                "generator_model_id": GENERATOR_MODEL_ID,
+                "generator_model_revision": GENERATOR_MODEL_REVISION,
+                "verifier_model_id": VERIFIER_MODEL_ID,
+                "verifier_model_revision": VERIFIER_MODEL_REVISION,
+                "reasoner_model_id": REASONER_MODEL_ID,
+                "reasoner_model_revision": REASONER_MODEL_REVISION,
                 "embedding_model_id": EMBEDDING_MODEL_ID,
                 "embedding_model_revision": EMBEDDING_MODEL_REVISION,
                 "medgemma_prompt_budget": frozen_budget_config(),
@@ -1742,10 +1839,32 @@ def main() -> int:
                 )
                 for record in case_outputs
             )
-            model = OpenAICompatibleDiagnosticModel(
-                model_name=CHAT_MODEL_ID,
-                model_revision=CHAT_MODEL_REVISION,
-                base_url=CHAT_URL,
+            generator_model = OpenAICompatibleDiagnosticModel(
+                model_name=GENERATOR_MODEL_ID,
+                model_revision=GENERATOR_MODEL_REVISION,
+                base_url=chat_slot_boundary_url(
+                    GENERATOR_MODEL_ID, GENERATOR_MODEL_REVISION
+                ),
+                timeout_seconds=600,
+                context_window=MAX_MODEL_LEN,
+                max_output_tokens=COMPLETION_TOKENS,
+            )
+            verifier_model = OpenAICompatibleDiagnosticModel(
+                model_name=VERIFIER_MODEL_ID,
+                model_revision=VERIFIER_MODEL_REVISION,
+                base_url=chat_slot_boundary_url(
+                    VERIFIER_MODEL_ID, VERIFIER_MODEL_REVISION
+                ),
+                timeout_seconds=600,
+                context_window=MAX_MODEL_LEN,
+                max_output_tokens=COMPLETION_TOKENS,
+            )
+            reasoner_model = OpenAICompatibleDiagnosticModel(
+                model_name=REASONER_MODEL_ID,
+                model_revision=REASONER_MODEL_REVISION,
+                base_url=chat_slot_boundary_url(
+                    REASONER_MODEL_ID, REASONER_MODEL_REVISION
+                ),
                 timeout_seconds=600,
                 context_window=MAX_MODEL_LEN,
                 max_output_tokens=COMPLETION_TOKENS,
@@ -1759,9 +1878,9 @@ def main() -> int:
                 max_output_tokens=ARGUMENT_GENERATOR_COMPLETION_TOKENS,
             )
             runner = ExperimentRunner(
-                model=model,
-                reasoner_model=model,
-                verifier_model=model,
+                model=generator_model,
+                reasoner_model=reasoner_model,
+                verifier_model=verifier_model,
                 retriever=FixedGraphRagKnowledgeRetriever(
                     corpus,
                     case_outputs,
@@ -1929,9 +2048,17 @@ def main() -> int:
             ),
             "medgemma_prompt_budget": frozen_budget_config(),
             "model_roles": {
-                "medgemma_standard_generator_verifier_and_final_reasoner": {
-                    "model_id": CHAT_MODEL_ID,
-                    "model_revision": CHAT_MODEL_REVISION,
+                "generator": {
+                    "model_id": GENERATOR_MODEL_ID,
+                    "model_revision": GENERATOR_MODEL_REVISION,
+                },
+                "verifier": {
+                    "model_id": VERIFIER_MODEL_ID,
+                    "model_revision": VERIFIER_MODEL_REVISION,
+                },
+                "reasoner": {
+                    "model_id": REASONER_MODEL_ID,
+                    "model_revision": REASONER_MODEL_REVISION,
                 },
                 "posthoc_family_judge": {
                     "model_id": JUDGE_MODEL_ID,
@@ -1948,14 +2075,17 @@ def main() -> int:
                 "policy_id": "pinned-greedy-sequential-v1",
                 "request_processing": "sequential",
                 "models": {
-                    "medgemma": model.decoding_config,
+                    "generator": generator_model.decoding_config,
+                    "verifier": verifier_model.decoding_config,
+                    "reasoner": reasoner_model.decoding_config,
                     "qwen_family_judge": judge_model.decoding_config,
                 },
             },
             "chunked_prefill": True,
             "gpu_memory_utilization": {
                 "embedding": 0.10, "qwen_judge": 0.55,
-                "medgemma_verifier": 0.20,
+                "chat_slots": len(CHAT_SLOTS),
+                "chat_slot_gpu_memory_utilization": CHAT_SLOT_GPU_MEMORY_UTILIZATION,
             },
             "artifact_sha256": _artifact_hashes(run_root),
         }

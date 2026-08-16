@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from hf_job.mapping_diagnostic import (
+from job.mapping_diagnostic import (
     DECISIONS,
     decision_schema,
     diagnostic_plan,

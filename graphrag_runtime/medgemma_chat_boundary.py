@@ -181,7 +181,7 @@ def make_chat_boundary_handler(
             # non-default values) was retired as dead code -- it was never
             # reachable from the executed pipeline. These keys are kept
             # constant so the audit-log schema consumed by
-            # hf_job.run.audit_medgemma_prompt_boundary /
+            # job.run.audit_medgemma_prompt_boundary /
             # audit_all_completion_prompts is unchanged.
             structured_output_audit = {
                 "structured_output_injected": False,

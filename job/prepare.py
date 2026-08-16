@@ -13,7 +13,7 @@ from clinical_cds.experiment import protocol_sha256
 from clinical_cds.normalization import GRAPH_LABEL_UMLS_QUERIES
 from clinical_cds.terminology.local_umls import build_local_umls_subset
 from clinical_cds.terminology.candidates import extract_candidate_terms
-from hf_job.config import OUTPUT_TARGET, RUN_CONFIG, RUN_ID, RUN_PHASE, RUN_SCOPE
+from job.config import OUTPUT_TARGET, RUN_CONFIG, RUN_ID, RUN_PHASE, RUN_SCOPE
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -156,7 +156,7 @@ def local_imports(path: Path) -> set[Path]:
                 if alias.name != "*"
             )
         for module in modules:
-            if module.startswith(("clinical_cds", "graphrag_runtime", "hf_job")):
+            if module.startswith(("clinical_cds", "graphrag_runtime", "job")):
                 source = module_file(module)
                 if source:
                     found.add(source)
@@ -187,7 +187,7 @@ def controlled_clinical_terms(documents_path: Path) -> set[str]:
 
 def runtime_files() -> tuple[Path, ...]:
     required = {
-        PROJECT_ROOT / "hf_job/run.py",
+        PROJECT_ROOT / "job/run.py",
         PROJECT_ROOT / "graphrag_runtime/medgemma_chat_boundary.py",
     }
     pending = list(required)

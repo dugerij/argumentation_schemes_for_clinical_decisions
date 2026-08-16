@@ -93,7 +93,7 @@ predictions.
 |---|---|
 | `clinical_cds/` | Clinical cases, retrieval integration, argumentation, evaluation, and reporting |
 | `graphrag_runtime/` | GraphRAG corpus, retrieval, provenance, and prompt-boundary controls |
-| `hf_job/` | Reproducible Hugging Face package preparation and remote runtime |
+| `job/` | Reproducible Hugging Face package preparation and remote runtime |
 | `tests/` | Unit, boundary, provenance, retrieval, and evaluation tests |
 | `examples/` | Example input records |
 | `RUNNING.md` | How to run the comparison, locally or as a remote job |
@@ -129,7 +129,7 @@ resources are not committed to the repository; see
 [RUNNING.md](RUNNING.md) for expected locations and preparation checks.
 
 Remote comparison runs use the pinned model and container configuration
-defined in `hf_job/`. Runtime code never submits, retries, or resubmits a
+defined in `job/`. Runtime code never submits, retries, or resubmits a
 paid job by itself.
 
 ## Running a comparison

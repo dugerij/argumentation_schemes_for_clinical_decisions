@@ -125,7 +125,7 @@ def test_stage_specific_completion_budget_rejects_one_token_over(completion: int
 
 
 def test_runtime_uses_sequential_chunked_prefill_without_gpu_utilization_change() -> None:
-    source = Path("hf_job/run.py").read_text()
+    source = Path("job/run.py").read_text()
     from graphrag_runtime.vllm_config import completion_server_command
 
     command = completion_server_command(

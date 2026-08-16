@@ -16,7 +16,7 @@ venv/bin/hf auth login
 ```
 
 The local `output/` tree must contain the recovered GraphRAG index,
-controlled corpus tables, and query files referenced by `hf_job/config.py`.
+controlled corpus tables, and query files referenced by `job/config.py`.
 
 UMLS must be available at `data/umls/<version>/META`, including
 `MRCONSO.RRF` and `MRSTY.RRF`. The derived database is expected at
@@ -48,7 +48,7 @@ Inspect the generated manifests and hashes before uploading.
 
 ## Scopes
 
-`RUN_SCOPE` selects the case set (see `hf_job/config.py`):
+`RUN_SCOPE` selects the case set (see `job/config.py`):
 
 | Scope | Case count | Typical timeout |
 |---|---|---|
@@ -69,7 +69,7 @@ export RUN_ID="run-$(date -u +%Y%m%dt%H%M%Sz)"
 export HF_BUCKET="Dugerij/jobs-artifacts"
 export HF_IMAGE="vllm/vllm-openai:v0.18.1"
 
-venv/bin/python -m hf_job.prepare
+venv/bin/python -m job.prepare
 ```
 
 Upload each prepared directory to its isolated private prefix:
@@ -106,7 +106,7 @@ venv/bin/hf jobs run --detach \
   --volume "hf://buckets/$HF_BUCKET/$RUN_ID/input:/workspace/query:ro" \
   --volume "hf://buckets/$HF_BUCKET/$RUN_ID/output:/outputs:rw" \
   "$HF_IMAGE" \
-  python3 /workspace/project/hf_job/run.py
+  python3 /workspace/project/job/run.py
 ```
 
 Use `--timeout 4h` for the `development` scope.
@@ -140,7 +140,7 @@ export RUN_SCOPE=development
 export RUN_PHASE=retrieval
 export RUN_ID="retrieval-$(date -u +%Y%m%dt%H%M%Sz)"
 
-venv/bin/python -m hf_job.prepare
+venv/bin/python -m job.prepare
 ```
 
 Upload and submit normally. Set `RUN_CASE_LIMIT`/`RUN_SAMPLE_SEED` before
@@ -162,7 +162,7 @@ export RUN_SAMPLE_SEED=bounded-development-v1
 export RESUME_COMPARISON_ROOT="output/hf-downloads/PRIOR_RUN/runs/PRIOR_RUN/comparison-development"
 export RUN_ID="evaluation-resume-$(date -u +%Y%m%dt%H%M%Sz)"
 
-venv/bin/python -m hf_job.prepare
+venv/bin/python -m job.prepare
 ```
 
 Inspect, upload, and submit the new sealed package. The terminal manifest
@@ -205,7 +205,7 @@ Produce a breakdown of why the argumentation method abstained or fell
 back:
 
 ```bash
-python3 -m hf_job.failure_profile \
+python3 -m job.failure_profile \
   output/hf-downloads/$RUN_ID/runs/$RUN_ID/comparison-development \
   --markdown
 ```
