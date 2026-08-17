@@ -83,15 +83,22 @@ diagnostic or resolver authority and cannot change a prediction.
 
 ## Evidence rules
 
-- Patient findings keep their section, polarity, temporality, quantities and units.
-- Knowledge passages are broken down into atomic warrants before anything is bound to them.
+- A finding lifted out of a note keeps whatever makes it mean something: the section it
+  came from, whether it was present or explicitly denied, whether it is current or
+  historical, and the numbers with their units. "No chest pain" never quietly becomes
+  "chest pain".
+- A retrieved guideline passage is split into single claims before any patient evidence is
+  attached to it, so a citation points at one specific criterion instead of a paragraph
+  that happens to contain it.
 - UMLS settles terminology identity and synonyms. It carries no diagnostic authority.
 - Risk factors, manifestations, guideline authority and subtype features cannot establish a
   parent diagnosis on their own.
-- A derived decisive-anchor view marks only existing, sourced diagnostic-test or
-  numeric-threshold claims, preserving the original graph node, wording, diagnostic path
-  and source IDs. Symptoms, signs, risk factors and generic guidance are excluded, and
-  anchor coverage is audited before the view is allowed to affect resolution.
+- Some criteria decide a diagnosis and others only lend it weight. A separate view flags
+  the deciding ones — diagnostic tests and numeric thresholds that were already in the
+  graph and already sourced. It copies them exactly as written, keeping the node, the
+  wording, the diagnostic path and the source IDs, and it never promotes a symptom, a sign,
+  a risk factor or a piece of general advice into that group. How much of the graph it
+  covers is audited before it is allowed to affect any decision.
 - Missing support is not treated as contradiction.
 - Every cited identifier has to belong to the immutable case or retrieval bundle.
 - Prompts use bounded JSON schemas and fixed completion limits, with reasoning and evidence
