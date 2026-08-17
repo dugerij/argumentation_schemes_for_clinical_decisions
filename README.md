@@ -142,7 +142,7 @@ presentation, evaluation and remote package preparation.
 
 ## Data and models
 
-The comparison runs on de-identified MIMIC-derived diagnostic cases, a local UMLS
+The comparison runs on deidentified MIMIC-derived diagnostic cases, a local UMLS
 installation, and provenance-backed diagnostic knowledge graphs. None of these are in the
 repository — [RUNNING.md](RUNNING.md) lists where they are expected and how their
 preparation is checked.
